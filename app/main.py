@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+import asyncio
+from app.services.snapshot_service import init_db, start_snapshot_loop
 from app.api.routes.kalshi import router as kalshi_router
 
 app = FastAPI(title="FIFA Mispricing Tracker", version="0.1.0")
@@ -14,3 +16,8 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    asyncio.create_task(start_snapshot_loop())

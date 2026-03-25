@@ -157,7 +157,7 @@ async def start_snapshot_loop():
         except Exception as e:
             print("Snapshot cycle failed:", e)
 
-        await asyncio.sleep(1500)
+        await asyncio.sleep(300)
 
 
 def get_match_history(match_id: str, hours: int = 6):

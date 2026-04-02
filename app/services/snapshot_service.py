@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from app.services.match_analysis_service import build_match_analysis
 from app.core.dependencies import get_kalshi_client
+from app.services.odds_client import OddsClient
 
 DB_PATH = "fifa_tracker.db"
 
@@ -96,54 +97,71 @@ def save_snapshot_row(
 
 async def snapshot_all_matches():
     client = get_kalshi_client()
+    odds_client = OddsClient()
 
     try:
+        print("Fetching markets...")
+
         data = await client.get_markets(
             series_ticker="KXWCGAME",
             status="open",
-            limit=200,
+            limit=20,
         )
 
         markets = data.get("markets", [])
         match_ids = list(set(m["event_ticker"] for m in markets))
 
-        for match_id in match_ids:
-            try:
-                analysis = await build_match_analysis(match_id)
+        print("Fetching sportsbook events...")
+        sportsbook_events = await odds_client.fetch_events()
+        
+        print(f"Total matches: {len(match_ids)}")
+        tasks = [
+            build_match_analysis(
+                match_id,
+                markets,
+                sportsbook_events,
+            )
+            for match_id in match_ids
+        ]
 
-                if not analysis or "kalshi" not in analysis:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for analysis in results:
+            if (
+                not analysis
+                or isinstance(analysis, Exception)
+                or "kalshi" not in analysis
+                or "analysis" not in analysis
+            ):
+                continue
+
+            kalshi_outcomes = analysis["kalshi"]["outcomes"]
+            analysis_outcomes = analysis["analysis"]["outcomes"]
+
+            for outcome in analysis_outcomes:
+                team = outcome["team"]
+
+                kalshi_data = next(
+                    (o for o in kalshi_outcomes if o["team"] == team),
+                    None
+                )
+
+                if not kalshi_data:
                     continue
 
-                kalshi_outcomes = analysis["kalshi"]["outcomes"]
-                analysis_outcomes = analysis["analysis"]["outcomes"]
-
-                for outcome in analysis_outcomes:
-                    team = outcome["team"]
-
-                    kalshi_data = next(
-                        (o for o in kalshi_outcomes if o["team"] == team),
-                        None
-                    )
-
-                    if not kalshi_data:
-                        continue
-
-                    save_snapshot_row(
-                        match_id=match_id,
-                        team=team,
-                        ask_probability=kalshi_data["implied_ask_prob"],
-                        bid_probability=kalshi_data["implied_bid_prob"],
-                        mid_price=kalshi_data["mid_price"],
-                        fair_probability=outcome["sportsbook_fair_probability"],
-                        expected_value=outcome["expected_value"],
-                        liquidity_score=outcome["liquidity_score"],
-                        confidence_score=outcome["confidence_score"],
-                        volume=kalshi_data.get("volume"),
-                        open_interest=kalshi_data.get("open_interest"),
-                    )
-
-            except Exception as e:
-                print(f"Snapshot error for {match_id}: {e}")
+                save_snapshot_row(
+                    match_id=analysis["match_id"],
+                    team=team,
+                    ask_probability=kalshi_data["implied_ask_prob"],
+                    bid_probability=kalshi_data["implied_bid_prob"],
+                    mid_price=kalshi_data["mid_price"],
+                    fair_probability=outcome["sportsbook_fair_probability"],
+                    expected_value=outcome["expected_value"],
+                    liquidity_score=outcome["liquidity_score"],
+                    confidence_score=outcome["confidence_score"],
+                    volume=kalshi_data.get("volume"),
+                    open_interest=kalshi_data.get("open_interest"),
+                )
 
     finally:
         await client.close()
@@ -157,7 +175,7 @@ async def start_snapshot_loop():
         except Exception as e:
             print("Snapshot cycle failed:", e)
 
-        await asyncio.sleep(300)
+        await asyncio.sleep(180)
 
 
 def get_match_history(match_id: str, hours: int = 6):

@@ -27,4 +27,5 @@ def health():
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    asyncio.create_task(start_snapshot_loop())
+    
+    

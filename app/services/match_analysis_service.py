@@ -1,14 +1,19 @@
+
 from app.core.dependencies import get_kalshi_client
 from app.services.odds_client import OddsClient
 from app.services.sportsbook_fair_model import SportsbookConsensusModel
 from app.services.mispricing import MispricingEngine
 
+print("LOADING MATCH ANALYSIS...")
 
 async def build_match_analysis(
     match_id: str,
+    markets: list,
+    sportsbook_events: list,
     series_ticker: str = "KXWCGAME",
     status: str = "open",
 ):
+    print(f"Processing match: {match_id}")
     client = get_kalshi_client()
     odds_client = OddsClient()
     fair_model = SportsbookConsensusModel()
@@ -16,13 +21,9 @@ async def build_match_analysis(
 
     try:
         # 1️⃣ Get Kalshi markets
-        data = await client.get_markets(
-            series_ticker=series_ticker,
-            status=status,
-            limit=200,
-        )
+        
 
-        markets = data.get("markets", [])
+        
 
         event_markets = [
             m for m in markets if m["event_ticker"] == match_id
@@ -96,8 +97,8 @@ async def build_match_analysis(
         home_team, away_team = clean_title.split(" vs ")
 
         # 2️⃣ Fetch sportsbook events
-        sportsbook_events = await odds_client.fetch_events()
-
+        
+        
         sportsbook_event = odds_client.match_event(
             sportsbook_events,
             home_team,

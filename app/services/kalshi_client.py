@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 import httpx
 
-
+print("LOADING KALSHI CLIENT...")
 class KalshiClient:
     def __init__(self, base_url: str):
         self._client = httpx.AsyncClient(base_url=base_url, timeout=20.0)

@@ -1,3 +1,5 @@
+print("LOADING DEPENDENCIES...")
+
 from app.services.kalshi_client import KalshiClient
 from app.core.config import settings
 

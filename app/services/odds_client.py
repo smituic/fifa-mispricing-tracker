@@ -17,18 +17,16 @@ class OddsClient:
     _cache_ttl = 900  # seconds (15 minutes)
 
     async def fetch_events(self):
-        """
-        Fetch all sportsbook events.
-        Uses caching to prevent excessive API calls.
-        """
+        print("➡️ Calling Odds API...")
 
         now = time.time()
 
-        # 1️⃣ Return cached data if still valid
+        # ✅ Return cache
         if (
             self._cache_data is not None
             and now - self._cache_timestamp < self._cache_ttl
         ):
+            print("⚡ Using cached sportsbook data")
             return self._cache_data
 
         params = {
@@ -38,16 +36,26 @@ class OddsClient:
             "oddsFormat": "decimal",
         }
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(self.BASE_URL, params=params)
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+                response = await client.get(self.BASE_URL, params=params)
+
+            print("✅ Odds API responded")
+
             response.raise_for_status()
             data = response.json()
 
-        # 2️⃣ Save to cache
-        self._cache_data = data
-        self._cache_timestamp = now
+            # cache
+            self._cache_data = data
+            self._cache_timestamp = now
 
-        return data
+            return data
+
+        except Exception as e:
+            print("❌ Odds API FAILED:", e)
+
+            # fallback: return empty so system continues
+            return []
 
     def match_event(self, events: list, home_team: str, away_team: str):
         """

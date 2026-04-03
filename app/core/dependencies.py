@@ -5,3 +5,8 @@ from app.core.config import settings
 
 def get_kalshi_client() -> KalshiClient:
     return KalshiClient(base_url=settings.KALSHI_BASE_URL)
+
+
+
+
+#python -m scripts.run_snapshot

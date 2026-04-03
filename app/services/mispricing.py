@@ -12,29 +12,31 @@ class MispricingEngine:
 
     def analyze_match(self, match: dict, sportsbook_fair: dict):
         results = []
+        KALSHI_NAME_MAP = {
+            "Tie": "Draw",
+            "IR Iran": "Iran",
+            "Curacao": "Curaçao",  # sportsbook uses the accented version
+        }
 
+        # AFTER:
         for outcome in match["outcomes"]:
             team = outcome["team"]
+            team = KALSHI_NAME_MAP.get(team, team)
 
-            # Kalshi probabilities already normalized (0–1)
             kalshi_ask_prob = outcome["implied_ask_prob"]
             kalshi_bid_prob = outcome["implied_bid_prob"]
+            kalshi_mid = outcome.get("mid_price") or kalshi_ask_prob  # ← use mid
 
             fair_prob = sportsbook_fair.get(team)
 
             if fair_prob is None or kalshi_ask_prob is None:
                 continue
 
-            # Spread vs ask
-            spread = round(fair_prob - kalshi_ask_prob, 4)
-
-            # EV (same as spread since price == probability)
+            spread = round(fair_prob - kalshi_mid, 4)  # ← compare vs mid
             ev = spread
 
-            # Dev testing: inject artificial mispricing
-            if settings.DEV_MODE:
-                ev += random.uniform(-0.03, 0.03)
-                spread = ev
+            
+            
 
 
             # Classification

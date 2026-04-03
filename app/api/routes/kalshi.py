@@ -293,6 +293,7 @@ async def fifa_matches(
                 "best_signal": best_signal
             })
 
+        matches.sort(key=lambda x: (-(x["top_ev"] or -999), x["match_title"]))
         return {
             "match_count": len(matches),
             "matches": matches
@@ -301,17 +302,33 @@ async def fifa_matches(
     finally:
         await client.close()
 
+# AFTER (fixed):
 @router.get("/fifa/match/{match_id}")
 async def fifa_match_detail(
     match_id: str,
     series_ticker: str = "KXWCGAME",
     status: str = "open",
+    client: KalshiClient = Depends(get_kalshi_client),
 ):
-    return await build_match_analysis(
-        match_id=match_id,
-        series_ticker=series_ticker,
-        status=status,
-    )
+    try:
+        data = await client.get_markets(
+            series_ticker=series_ticker,
+            status=status,
+            limit=200,
+        )
+        markets = data.get("markets", [])
+        sportsbook_events = await odds_client.fetch_events()
+
+        return await build_match_analysis(
+            match_id=match_id,
+            markets=markets,
+            sportsbook_events=sportsbook_events,
+            client=client,
+            odds_client=odds_client,
+        )
+    finally:
+        await client.close()
+        
 @router.get("/fifa/top-signals")
 async def fifa_top_signals(
     min_ev: float = 0.0,

@@ -100,15 +100,29 @@ async def build_match_analysis(
         clean_title = title.replace(" Winner?", "").strip()
         home_team, away_team = clean_title.split(" vs ")
 
+        home_team = normalize_team_name(home_team)
+        away_team = normalize_team_name(away_team)
+        clean_title = f"{home_team} vs {away_team}"
+
         sportsbook_event = odds_client.match_event(
             sportsbook_events, home_team, away_team
         )
+        print("🔍 TRY MATCH:", home_team, "vs", away_team)
         if not sportsbook_event:
+            print("❌ FAILED MATCH:", home_team, "vs", away_team)
             return {"detail": "No matching sportsbook event found"}
 
         sportsbook_fair = fair_model.compute_fair_probabilities(sportsbook_event)
         if not sportsbook_fair:
-            return {"detail": "Unable to compute sportsbook fair probabilities"}
+            print(f"⚠️ No fair data for {home_team} vs {away_team}")
+
+            return {
+                "match_id": match_id,
+                "match_title": clean_title,
+                "kalshi": {"outcomes": grouped_outcomes},
+                "sportsbook": {"fair_probabilities": None},
+                "analysis": {"outcomes": []},
+            }
 
         match_obj = {"match": title, "outcomes": grouped_outcomes}
         analysis = engine.analyze_match(match_obj, sportsbook_fair)
@@ -145,6 +159,8 @@ async def build_match_analysis(
         return {
             "match_id": match_id,
             "match_title": clean_title,
+            "home_team": home_team,
+            "away_team": away_team,
             "kalshi": {"outcomes": grouped_outcomes},
             "sportsbook": {"fair_probabilities": sportsbook_fair},
             "analysis": {"outcomes": analysis},

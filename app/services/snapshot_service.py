@@ -87,6 +87,19 @@ async def save_snapshot_rows_async(rows: list[dict]):
     await loop.run_in_executor(None, _save_snapshot_rows_bulk, rows)
 
 
+TEAM_NAME_MAP = {
+    "IR Iran": "Iran",
+    "Korea Republic": "South Korea",
+    "DR Congo": "Congo",
+    "Curaçao": "Curacao",
+    "Côte d'Ivoire": "Ivory Coast",
+    "Bosnia & Herzegovina": "Bosnia",
+}
+
+def normalize_team_name(name: str) -> str:
+    if not name:
+        return name
+    return TEAM_NAME_MAP.get(name, name)
 async def snapshot_all_matches():
     # ✅ One shared client for the entire cycle, not one per match
     client = KalshiClient(base_url=settings.KALSHI_BASE_URL)
@@ -141,9 +154,9 @@ async def snapshot_all_matches():
             analysis_outcomes = analysis["analysis"]["outcomes"]
 
             for outcome in analysis_outcomes:
-                team = outcome["team"]
+                team = normalize_team_name(outcome["team"])
                 kalshi_data = next(
-                    (o for o in kalshi_outcomes if o["team"] == team), None
+                    (o for o in kalshi_outcomes if normalize_team_name(o["team"]) == team), None
                 )
                 if not kalshi_data:
                     continue

@@ -4,7 +4,6 @@ from difflib import SequenceMatcher
 from app.core.config import settings
 
 
-# ✅ Team name aliases — Kalshi uses short names, sportsbook uses full names
 TEAM_ALIASES = {
     "usa": ["united states", "usa", "us"],
     "south korea": ["korea republic", "south korea", "korea"],
@@ -18,12 +17,22 @@ TEAM_ALIASES = {
     "cape verde": ["cape verde", "cpv"],
     "curacao": ["curaçao", "curacao"],
     "curaçao": ["curaçao", "curacao"],
-    "dr congo": ["dr congo", "congo dr", "democratic republic of congo"],
-    "bosnia": ["bosnia & herzegovina", "bosnia and herzegovina", "bosnia"],
+    # ✅ Added: DR Congo variants
+    "dr congo": ["dr congo", "congo dr", "democratic republic of congo", "congo", "drc"],
+    "congo": ["dr congo", "congo dr", "democratic republic of congo", "congo", "drc"],
+    "portugal dr congo": ["portugal vs dr congo"],  # edge case guard
+    # ✅ Added: Bosnia variants
+    "bosnia": ["bosnia & herzegovina", "bosnia and herzegovina", "bosnia", "bih"],
+    "bosnia & herzegovina": ["bosnia & herzegovina", "bosnia and herzegovina", "bosnia", "bih"],
+    # ✅ Added: Czech Republic variants
+    "czech republic": ["czech republic", "czechia", "czech"],
+    "czechia": ["czech republic", "czechia", "czech"],
+    # ✅ Added: Turkey/Turkiye
+    "turkey": ["turkey", "tur", "türkiye", "turkiye"],
+    "türkiye": ["turkey", "tur", "türkiye", "turkiye"],
     "france": ["france", "fra"],
     "norway": ["norway", "nor"],
     "iraq": ["iraq", "irq"],
-    "czech republic": ["czech republic", "czechia"],
     "austria": ["austria", "aut"],
     "croatia": ["croatia", "cro"],
     "senegal": ["senegal", "sen"],
@@ -43,7 +52,19 @@ TEAM_ALIASES = {
     "switzerland": ["switzerland", "sui"],
     "qatar": ["qatar", "qat"],
     "canada": ["canada", "can"],
-    "turkey": ["turkey", "tur", "türkiye"],
+    "sweden": ["sweden", "swe"],
+    "japan": ["japan", "jpn"],
+    "egypt": ["egypt", "egy"],
+    "mexico": ["mexico", "mex"],
+    "germany": ["germany", "ger"],
+    "netherlands": ["netherlands", "ned", "holland"],
+    "brazil": ["brazil", "bra"],
+    "spain": ["spain", "esp"],
+    "argentina": ["argentina", "arg"],
+    "belgium": ["belgium", "bel"],
+    "england": ["england", "eng"],
+    "australia": ["australia", "aus"],
+    "uruguay": ["uruguay", "uru"],
 }
 
 
@@ -80,6 +101,21 @@ def _is_match(kalshi_team: str, sportsbook_team: str) -> bool:
     return False
 
 
+TEAM_NAME_MAP = {
+    "IR Iran": "Iran",
+    "Korea Republic": "South Korea",
+    "DR Congo": "Congo",
+    "Curaçao": "Curacao",
+    "Côte d'Ivoire": "Ivory Coast",
+    "Bosnia & Herzegovina": "Bosnia",
+}
+
+def normalize_team_name(name: str) -> str:
+    if not name:
+        return name
+    return TEAM_NAME_MAP.get(name, name)
+
+
 class OddsClient:
     BASE_URL = "https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds"
 
@@ -110,7 +146,6 @@ class OddsClient:
             response.raise_for_status()
             data = response.json()
 
-            # ✅ Log all available sportsbook teams so you can add aliases if needed
             print("📋 Sportsbook events available:")
             for e in data:
                 print(f"   {e.get('home_team')} vs {e.get('away_team')}")
@@ -131,28 +166,35 @@ class OddsClient:
             event_home = event.get("home_team", "")
             event_away = event.get("away_team", "")
 
-            home_match = _is_match(home_team, event_home)
-            away_match = _is_match(away_team, event_away)
+            home_norm = _normalize(normalize_team_name(home_team))
+            away_norm = _normalize(normalize_team_name(away_team))
 
-            # ✅ Also try flipped (some APIs swap home/away)
-            home_match_flipped = _is_match(home_team, event_away)
-            away_match_flipped = _is_match(away_team, event_home)
+            event_home_norm = _normalize(normalize_team_name(event_home))
+            event_away_norm = _normalize(normalize_team_name(event_away))
+
+            home_match = _is_match(home_norm, event_home_norm)
+            away_match = _is_match(away_norm, event_away_norm)
+
+            home_match_flipped = _is_match(home_norm, event_away_norm)
+            away_match_flipped = _is_match(away_norm, event_home_norm)
 
             if home_match and away_match:
-                score = _similarity(_normalize(home_team), _normalize(event_home)) + \
-                        _similarity(_normalize(away_team), _normalize(event_away))
+                score = _similarity(home_norm, event_home_norm) + \
+                        _similarity(away_norm, event_away_norm)
                 if score > best_score:
                     best_score = score
                     best_match = event
 
             elif home_match_flipped and away_match_flipped:
-                score = _similarity(_normalize(home_team), _normalize(event_away)) + \
-                        _similarity(_normalize(away_team), _normalize(event_home))
+                score = _similarity(home_norm, event_away_norm) + \
+                        _similarity(away_norm, event_home_norm)
                 if score > best_score:
                     best_score = score
                     best_match = event
 
-        if not best_match:
-            print(f"⚠️ No sportsbook match found for: {home_team} vs {away_team}")
+        # ✅ FIXED: fallback is OUTSIDE the loop (was incorrectly indented inside before)
+        if not best_match and best_score > 1.5:
+            print(f"⚡ Using fuzzy fallback for: {home_team} vs {away_team}")
+            return best_match
 
         return best_match

@@ -142,6 +142,8 @@ async def fifa_analysis(
             clean_title = title.replace(" Winner?", "").strip()
             home_team, away_team = clean_title.split(" vs ")
 
+           
+
             # 3️⃣ Match sportsbook event
             sportsbook_event = odds_client.match_event(
                 sportsbook_events,
@@ -189,6 +191,20 @@ async def fifa_analysis(
     finally:
         await client.close()
 
+TEAM_NAME_MAP = {
+    "IR Iran": "Iran",
+    "Korea Republic": "South Korea",
+    "DR Congo": "Congo",
+    "Curaçao": "Curacao",
+    "Côte d'Ivoire": "Ivory Coast",
+    "Bosnia & Herzegovina": "Bosnia",
+}
+
+def normalize_team_name(name: str) -> str:
+    if not name:
+        return name
+    return TEAM_NAME_MAP.get(name, name)
+
 @router.get("/fifa/matches")
 async def fifa_matches(
     series_ticker: str = "KXWCGAME",
@@ -208,6 +224,23 @@ async def fifa_matches(
         )
 
         markets = data.get("markets", [])
+        kalshi_match_set = set()
+
+        for m in markets:
+            title = m.get("title")
+            if not title or " vs " not in title:
+                continue
+
+            clean = title.replace(" Winner?", "").strip()
+
+            try:
+                home, away = clean.split(" vs ")
+                home = normalize_team_name(home)
+                away = normalize_team_name(away)
+                kalshi_match_set.add(f"{home} vs {away}")
+            except:
+                continue
+
         grouped = defaultdict(list)
 
         for market in markets:
@@ -229,6 +262,26 @@ async def fifa_matches(
             })
 
         sportsbook_events = await odds_client.fetch_events()
+        sportsbook_match_set = set()
+
+        for e in sportsbook_events:
+            home = normalize_team_name(e.get("home_team"))
+            away = normalize_team_name(e.get("away_team"))
+
+            if home and away:
+                sportsbook_match_set.add(f"{home} vs {away}")
+        
+        missing_in_kalshi = sportsbook_match_set - kalshi_match_set
+
+        print("\n❌ NOT IN KALSHI:")
+        for m in sorted(missing_in_kalshi):
+            print(f"   {m}")
+
+        missing_in_sportsbook = kalshi_match_set - sportsbook_match_set
+
+        print("\n⚠️ NOT IN SPORTSBOOK:")
+        for m in sorted(missing_in_sportsbook):
+            print(f"   {m}")
 
         matches = []
 
@@ -244,6 +297,12 @@ async def fifa_matches(
 
             clean_title = title.replace(" Winner?", "").strip()
             home_team, away_team = clean_title.split(" vs ")
+
+            home_team = normalize_team_name(home_team)
+            
+            away_team = normalize_team_name(away_team)
+            
+            clean_title = f"{home_team} vs {away_team}"
 
             sportsbook_event = odds_client.match_event(
                 sportsbook_events,

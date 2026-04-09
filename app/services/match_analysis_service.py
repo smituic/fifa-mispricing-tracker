@@ -12,6 +12,8 @@ TEAM_NAME_MAP = {
     "Curaçao": "Curacao",
     "Côte d'Ivoire": "Ivory Coast",
     "Bosnia & Herzegovina": "Bosnia",
+    "Tie": "Draw",
+    "Draw": "Draw",
 }
 
 def normalize_team_name(name: str) -> str:
@@ -79,6 +81,11 @@ async def build_match_analysis(
             liquidity_score = round(
                 (volume_score * 0.4 + open_interest_score * 0.4 + spread_score * 0.2) * 10, 2
             )
+            raw_team = market.get("yes_sub_title")
+            normalized_team = normalize_team_name(raw_team)
+
+            if normalized_team == "Tie":
+                normalized_team = "Draw"
 
             grouped_outcomes.append({
                 "team": normalize_team_name(market.get("yes_sub_title")),

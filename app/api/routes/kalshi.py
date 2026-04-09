@@ -1,10 +1,7 @@
 from fastapi import APIRouter, Depends
-from collections import defaultdict
 from app.core.config import settings
 from typing import List, Dict, Any
 from app.services.snapshot_service import get_match_history_for_all
-from app.services.mispricing import MispricingEngine
-from app.services.sportsbook_fair_model import SportsbookConsensusModel
 from app.core.dependencies import get_kalshi_client
 from app.services.odds_client import OddsClient
 from app.services.kalshi_client import KalshiClient
@@ -91,11 +88,6 @@ async def fifa_analysis(
     client: KalshiClient = Depends(get_kalshi_client),
 ):
     try:
-        # odds_client = OddsClient()
-        fair_model = SportsbookConsensusModel()
-        engine = MispricingEngine()
-
-        # 1️⃣ Get Kalshi markets
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,
@@ -103,84 +95,31 @@ async def fifa_analysis(
         )
 
         markets = data.get("markets", [])
-        grouped = defaultdict(list)
-
-        for market in markets:
-            
-            event_ticker = market["event_ticker"]
-
-            bid = market.get("yes_bid_dollars")
-            ask = market.get("yes_ask_dollars")
-
-            bid = float(bid) if bid is not None else None
-            ask = float(ask) if ask is not None else None
-
-            grouped[event_ticker].append({
-                "team": market.get("yes_sub_title"),
-                "yes_bid": bid,
-                "yes_ask": ask,
-                "implied_bid_prob": bid,
-                "implied_ask_prob": ask,
-            })
-
-        # 2️⃣ Get sportsbook events once
         sportsbook_events = await odds_client.fetch_events()
 
+        event_tickers = sorted(list(set(m["event_ticker"] for m in markets)))
         response = []
 
-        for event_ticker, outcomes in grouped.items():
-
-            title = next(
-                (m["title"] for m in markets if m["event_ticker"] == event_ticker),
-                None
+        for event_ticker in event_tickers:
+            full_analysis = await build_match_analysis(
+                match_id=event_ticker,
+                markets=markets,
+                sportsbook_events=sportsbook_events,
+                client=client,
+                odds_client=odds_client,
             )
 
-            if not title or " vs " not in title:
+            if (
+                not full_analysis
+                or "analysis" not in full_analysis
+                or "kalshi" not in full_analysis
+            ):
                 continue
-            
-            # Remove trailing " Winner?"
-            clean_title = title.replace(" Winner?", "").strip()
-            home_team, away_team = clean_title.split(" vs ")
-
-           
-
-            # 3️⃣ Match sportsbook event
-            sportsbook_event = odds_client.match_event(
-                sportsbook_events,
-                home_team,
-                away_team
-            )
-
-            if not sportsbook_event:
-                continue
-
-            # 4️⃣ Compute sportsbook fair
-            sportsbook_fair = fair_model.compute_fair_probabilities(
-                sportsbook_event
-            )
-
-            if not sportsbook_fair:
-                continue
-
-            match_obj = {
-                "match": title,
-                "outcomes": outcomes
-            }
-
-            # 5️⃣ Run mispricing engine
-            from app.services.match_analysis_service import build_match_analysis
-
-            full_analysis = await build_match_analysis(event_ticker)
-
-            if not full_analysis or "analysis" not in full_analysis:
-                continue
-
-            analysis = full_analysis["analysis"]["outcomes"]
 
             response.append({
                 "event_ticker": event_ticker,
-                "match": title,
-                "analysis": analysis
+                "match": full_analysis["match_title"],
+                "analysis": full_analysis["analysis"]["outcomes"],
             })
 
         return {
@@ -191,20 +130,6 @@ async def fifa_analysis(
     finally:
         await client.close()
 
-TEAM_NAME_MAP = {
-    "IR Iran": "Iran",
-    "Korea Republic": "South Korea",
-    "DR Congo": "Congo",
-    "Curaçao": "Curacao",
-    "Côte d'Ivoire": "Ivory Coast",
-    "Bosnia & Herzegovina": "Bosnia",
-}
-
-def normalize_team_name(name: str) -> str:
-    if not name:
-        return name
-    return TEAM_NAME_MAP.get(name, name)
-
 @router.get("/fifa/matches")
 async def fifa_matches(
     series_ticker: str = "KXWCGAME",
@@ -212,11 +137,6 @@ async def fifa_matches(
     client: KalshiClient = Depends(get_kalshi_client),
 ):
     try:
-        # odds_client = OddsClient()
-        fair_model = SportsbookConsensusModel()
-        engine = MispricingEngine()
-
-        # 1️⃣ Get Kalshi markets
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,
@@ -224,111 +144,33 @@ async def fifa_matches(
         )
 
         markets = data.get("markets", [])
-        kalshi_match_set = set()
-
-        for m in markets:
-            title = m.get("title")
-            if not title or " vs " not in title:
-                continue
-
-            clean = title.replace(" Winner?", "").strip()
-
-            try:
-                home, away = clean.split(" vs ")
-                home = normalize_team_name(home)
-                away = normalize_team_name(away)
-                kalshi_match_set.add(f"{home} vs {away}")
-            except:
-                continue
-
-        grouped = defaultdict(list)
-
-        for market in markets:
-            
-            event_ticker = market["event_ticker"]
-
-            bid = market.get("yes_bid_dollars")
-            ask = market.get("yes_ask_dollars")
-
-            bid = float(bid) if bid is not None else None
-            ask = float(ask) if ask is not None else None
-
-            grouped[event_ticker].append({
-                "team": market.get("yes_sub_title"),
-                "yes_bid": bid,
-                "yes_ask": ask,
-                "implied_bid_prob": bid,
-                "implied_ask_prob": ask,
-            })
-
         sportsbook_events = await odds_client.fetch_events()
-        sportsbook_match_set = set()
 
-        for e in sportsbook_events:
-            home = normalize_team_name(e.get("home_team"))
-            away = normalize_team_name(e.get("away_team"))
-
-            if home and away:
-                sportsbook_match_set.add(f"{home} vs {away}")
-        
-        missing_in_kalshi = sportsbook_match_set - kalshi_match_set
-
-        print("\n❌ NOT IN KALSHI:")
-        for m in sorted(missing_in_kalshi):
-            print(f"   {m}")
-
-        missing_in_sportsbook = kalshi_match_set - sportsbook_match_set
-
-        print("\n⚠️ NOT IN SPORTSBOOK:")
-        for m in sorted(missing_in_sportsbook):
-            print(f"   {m}")
-
+        event_tickers = sorted(list(set(m["event_ticker"] for m in markets)))
         matches = []
 
-        for event_ticker, outcomes in grouped.items():
-
-            title = next(
-                (m["title"] for m in markets if m["event_ticker"] == event_ticker),
-                None
+        for event_ticker in event_tickers:
+            full_analysis = await build_match_analysis(
+                match_id=event_ticker,
+                markets=markets,
+                sportsbook_events=sportsbook_events,
+                client=client,
+                odds_client=odds_client,
             )
 
-            if not title or " vs " not in title:
+            if (
+                not full_analysis
+                or "analysis" not in full_analysis
+                or "kalshi" not in full_analysis
+            ):
                 continue
 
-            clean_title = title.replace(" Winner?", "").strip()
-            home_team, away_team = clean_title.split(" vs ")
-
-            home_team = normalize_team_name(home_team)
-            
-            away_team = normalize_team_name(away_team)
-            
-            clean_title = f"{home_team} vs {away_team}"
-
-            sportsbook_event = odds_client.match_event(
-                sportsbook_events,
-                home_team,
-                away_team
-            )
-
-            if not sportsbook_event:
-                continue
-
-            sportsbook_fair = fair_model.compute_fair_probabilities(
-                sportsbook_event
-            )
-
-            if not sportsbook_fair:
-                continue
-
-            match_obj = {
-                "match": title,
-                "outcomes": outcomes
-            }
-
-            analysis = engine.analyze_match(match_obj, sportsbook_fair)
+            analysis_outcomes = full_analysis["analysis"]["outcomes"]
+            match_title = full_analysis["match_title"]
+            home_team, away_team = match_title.split(" vs ")
 
             positive_outcomes = [
-                o for o in analysis if o["expected_value"] > 0
+                o for o in analysis_outcomes if o["expected_value"] > 0
             ]
 
             if positive_outcomes:
@@ -339,7 +181,6 @@ async def fifa_matches(
                 top_ev = best_outcome["expected_value"]
                 best_signal = best_outcome["signal"]
             else:
-                best_outcome = None
                 top_ev = None
                 best_signal = "No edge"
 
@@ -347,12 +188,18 @@ async def fifa_matches(
                 "match_id": event_ticker,
                 "home_team": home_team,
                 "away_team": away_team,
-                "match_title": clean_title,
+                "match_title": match_title,
                 "top_ev": top_ev,
-                "best_signal": best_signal
+                "best_signal": best_signal,
             })
 
-        matches.sort(key=lambda x: (-(x["top_ev"] or -999), x["match_title"]))
+        matches.sort(
+            key=lambda x: (
+                -(x["top_ev"] if x["top_ev"] is not None else -999),
+                x["match_title"],
+            )
+        )
+
         return {
             "match_count": len(matches),
             "matches": matches
@@ -360,7 +207,6 @@ async def fifa_matches(
 
     finally:
         await client.close()
-
 # AFTER (fixed):
 @router.get("/fifa/match/{match_id}")
 async def fifa_match_detail(

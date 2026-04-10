@@ -326,3 +326,102 @@ async def fifa_ev_movers(hours: int = 6, limit: int = 10):
         "count": len(movers),
         "movers": movers[:limit]
     }
+
+@router.get("/fifa/opportunities")
+async def fifa_opportunities(
+    series_ticker: str = "KXWCGAME",
+    status: str = "open",
+    client: KalshiClient = Depends(get_kalshi_client),
+):
+    try:
+        data = await client.get_markets(
+            series_ticker=series_ticker,
+            status=status,
+            limit=200,
+        )
+
+        markets = data.get("markets", [])
+        sportsbook_events = await odds_client.fetch_events()
+
+        event_tickers = sorted(list(set(m["event_ticker"] for m in markets)))
+
+        positive_opportunities = []
+        negative_opportunities = []
+
+        for event_ticker in event_tickers:
+            full_analysis = await build_match_analysis(
+                match_id=event_ticker,
+                markets=markets,
+                sportsbook_events=sportsbook_events,
+                client=client,
+                odds_client=odds_client,
+            )
+
+            if (
+                not full_analysis
+                or "analysis" not in full_analysis
+                or "kalshi" not in full_analysis
+            ):
+                continue
+
+            match_title = full_analysis["match_title"]
+            analysis_outcomes = full_analysis["analysis"]["outcomes"]
+
+            if not analysis_outcomes:
+                continue
+
+            positive_outcomes = [
+                o for o in analysis_outcomes if o["expected_value"] > 0
+            ]
+
+            if positive_outcomes:
+                best_outcome = max(
+                    positive_outcomes,
+                    key=lambda x: x["expected_value"]
+                )
+
+                positive_opportunities.append({
+                    "match_id": event_ticker,
+                    "match_title": match_title,
+                    "outcome_team": best_outcome["team"],
+                    "expected_value": best_outcome["expected_value"],
+                    "signal": best_outcome["signal"],
+                    "confidence_score": best_outcome.get("confidence_score", 0),
+                    "liquidity_score": best_outcome.get("liquidity_score", 0),
+                })
+            else:
+                worst_outcome = min(
+                    analysis_outcomes,
+                    key=lambda x: x["expected_value"]
+                )
+
+                negative_opportunities.append({
+                    "match_id": event_ticker,
+                    "match_title": match_title,
+                    "outcome_team": worst_outcome["team"],
+                    "expected_value": worst_outcome["expected_value"],
+                    "signal": worst_outcome["signal"],
+                    "confidence_score": worst_outcome.get("confidence_score", 0),
+                    "liquidity_score": worst_outcome.get("liquidity_score", 0),
+                })
+
+        positive_opportunities.sort(
+            key=lambda x: x["expected_value"],
+            reverse=True
+        )
+        negative_opportunities.sort(
+            key=lambda x: x["expected_value"]
+        )
+
+        best_positive = positive_opportunities[0] if positive_opportunities else None
+
+        return {
+            "best_positive": best_positive,
+            "positive_count": len(positive_opportunities),
+            "negative_count": len(negative_opportunities),
+            "positive_opportunities": positive_opportunities,
+            "negative_opportunities": negative_opportunities,
+        }
+
+    finally:
+        await client.close()

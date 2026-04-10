@@ -1,20 +1,17 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Virtual environment
 venv/
 .venv/
+__pycache__/
+*.pyc
+.pytest_cache/
 
-
-# Environment variables
 .env
-
-# macOS
 .DS_Store
+*.log
 
-
-#SQLite DB
 fifa_tracker.db
+fifa_tracker.db-shm
+fifa_tracker.db-wal
+*.db
+*.sqlite3
+*.db-shm
+*.db-wal

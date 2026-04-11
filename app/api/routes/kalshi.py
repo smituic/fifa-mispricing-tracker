@@ -387,7 +387,9 @@ async def fifa_opportunities(
                     "expected_value": best_outcome["expected_value"],
                     "signal": best_outcome["signal"],
                     "confidence_score": best_outcome.get("confidence_score", 0),
+                    "confidence_label": best_outcome.get("confidence_label"),
                     "liquidity_score": best_outcome.get("liquidity_score", 0),
+                    "liquidity_label": best_outcome.get("liquidity_label"),
                 })
             else:
                 worst_outcome = min(
@@ -402,7 +404,9 @@ async def fifa_opportunities(
                     "expected_value": worst_outcome["expected_value"],
                     "signal": worst_outcome["signal"],
                     "confidence_score": worst_outcome.get("confidence_score", 0),
+                    "confidence_label": worst_outcome.get("confidence_label"),
                     "liquidity_score": worst_outcome.get("liquidity_score", 0),
+                    "liquidity_label": worst_outcome.get("liquidity_label"),
                 })
 
         positive_opportunities.sort(

@@ -21,6 +21,35 @@ def normalize_team_name(name: str) -> str:
         return name
     return TEAM_NAME_MAP.get(name, name)
 
+def clamp_score(value: float | int | None) -> float:
+    if value is None:
+        return 0.0
+    return round(max(0.0, min(10.0, float(value))), 2)
+
+
+def confidence_label(score: float) -> str:
+    if score < 2.5:
+        return "Very Low"
+    if score < 4.5:
+        return "Low"
+    if score < 6.5:
+        return "Moderate"
+    if score < 8.5:
+        return "High"
+    return "Very High"
+
+
+def liquidity_label(score: float) -> str:
+    if score < 2.5:
+        return "Very Thin"
+    if score < 4.5:
+        return "Thin"
+    if score < 6.5:
+        return "Tradable"
+    if score < 8.5:
+        return "Liquid"
+    return "Deep"
+
 
 async def build_match_analysis(
     match_id: str,
@@ -87,15 +116,26 @@ async def build_match_analysis(
             if normalized_team == "Tie":
                 normalized_team = "Draw"
 
+            liquidity_score = clamp_score(
+                (volume_score * 0.4 + open_interest_score * 0.4 + spread_score * 0.2) * 10
+            )
+
+            raw_team = market.get("yes_sub_title")
+            normalized_team = normalize_team_name(raw_team)
+
+            if normalized_team == "Tie":
+                normalized_team = "Draw"
+
             grouped_outcomes.append({
-                "team": normalize_team_name(market.get("yes_sub_title")),
+                "team": normalized_team,
                 "yes_bid": bid_prob,
                 "yes_ask": ask_prob,
-                "mid_price": round(mid_price, 4) if mid_price else None,
+                "mid_price": round(mid_price, 4) if mid_price is not None else None,
                 "spread_pct": round(spread_pct, 4),
                 "volume": volume,
                 "open_interest": open_interest,
                 "liquidity_score": liquidity_score,
+                "liquidity_label": liquidity_label(liquidity_score),
                 "implied_bid_prob": bid_prob,
                 "implied_ask_prob": ask_prob,
             })
@@ -144,15 +184,19 @@ async def build_match_analysis(
                 continue
 
             spread_pct = kalshi_outcome["spread_pct"]
-            liquidity_score = kalshi_outcome["liquidity_score"]
+            liq_score = clamp_score(kalshi_outcome["liquidity_score"])
+
             book_score = min(book_count / 10, 1)
             spread_penalty = min(spread_pct / 1, 1)
-            confidence_score = round(
-                (book_score * 0.7 + (1 - spread_penalty) * 0.3) * 10, 2
+
+            conf_score = clamp_score(
+                (book_score * 0.7 + (1 - spread_penalty) * 0.3) * 10
             )
 
-            outcome["liquidity_score"] = liquidity_score
-            outcome["confidence_score"] = confidence_score
+            outcome["liquidity_score"] = liq_score
+            outcome["liquidity_label"] = liquidity_label(liq_score)
+            outcome["confidence_score"] = conf_score
+            outcome["confidence_label"] = confidence_label(conf_score)
 
         analysis.sort(
             key=lambda x: (

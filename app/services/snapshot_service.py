@@ -191,7 +191,7 @@ async def start_snapshot_loop():
             await snapshot_all_matches()
         except Exception as e:
             print(f"Snapshot cycle failed: {e}")
-        await asyncio.sleep(180)
+        await asyncio.sleep(120)
 
 
 # ── Read helpers (unchanged logic, same signatures) ──────────────────────────

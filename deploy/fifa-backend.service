@@ -1,0 +1,45 @@
+[Unit]
+Description=FIFA Mispricing Tracker backend (FastAPI + uvicorn)
+# Start only after the network is fully up — matters because the snapshot
+# loop hits external APIs immediately on startup.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as the 'ubuntu' user, not root. Security best practice.
+User=ubuntu
+Group=ubuntu
+
+# Working directory must be the repo root so 'from app.services...' imports resolve.
+WorkingDirectory=/home/ubuntu/fifa-mispricing-tracker
+
+# Load environment variables from the .env file.
+# EnvironmentFile is a systemd directive — it reads KEY=VALUE pairs.
+EnvironmentFile=/home/ubuntu/fifa-mispricing-tracker/.env
+
+# The actual command. Uses uvicorn from the venv, binds to localhost only
+# (Cloudflare Tunnel will front it). Single worker — the snapshot loop
+# must not run in parallel.
+ExecStart=/home/ubuntu/fifa-mispricing-tracker/.venv/bin/uvicorn \
+    app.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 1
+
+# Restart policy: always restart on failure, with a 5-second backoff.
+Restart=always
+RestartSec=5
+
+# If the app is misbehaving and won't shut down, give it 30 seconds
+# before systemd sends SIGKILL.
+TimeoutStopSec=30
+
+# Logging: send stdout and stderr to systemd's journal.
+# View with: journalctl -u fifa-backend -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Start this service when the system reaches "multi-user" mode
+# (basically, "normal boot finished").
+WantedBy=multi-user.target

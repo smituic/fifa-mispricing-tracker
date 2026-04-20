@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # Minimum EV Threshold
     MIN_EV_SIGNAL: float = 0.01
 
-    DEV_MODE: bool = True
+    DEV_MODE: bool = False
 
 settings = Settings()
 

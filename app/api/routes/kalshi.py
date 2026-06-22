@@ -1,26 +1,34 @@
+from collections import defaultdict
 from fastapi import APIRouter, Depends
-from app.core.config import settings
 from typing import List, Dict, Any
-from app.services.snapshot_service import get_match_history_for_all
+
+from app.core.config import settings, SPORTS_CONFIG, DEFAULT_SPORT
 from app.core.dependencies import get_kalshi_client
-from app.services.odds_client import OddsClient
 from app.services.kalshi_client import KalshiClient
-from app.services.snapshot_service import get_match_history_for_all
-from app.services.snapshot_service import get_match_history
 from app.services.match_analysis_service import build_match_analysis
+from app.services.odds_client import OddsClient
+from app.services.snapshot_service import get_match_history, get_match_history_for_all
 
 router = APIRouter()
-
 
 odds_client = OddsClient()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIFA routes — preserved as-is for backward compatibility.
+# Each route internally pins sport="fifa" via DEFAULT_SPORT and includes
+# the sport in JSON responses so the frontend can become sport-aware later.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 @router.get("/fifa/markets")
 async def fifa_markets(
-    series_ticker: str = "KXWCGAME",
     status: str = "open",
     client: KalshiClient = Depends(get_kalshi_client),
 ):
+    sport = "fifa"
+    series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
+
     try:
         data = await client.get_markets(
             series_ticker=series_ticker,
@@ -32,7 +40,6 @@ async def fifa_markets(
         grouped = defaultdict(list)
 
         for market in markets:
-            
             event_ticker = market["event_ticker"]
 
             bid = market.get("yes_bid_dollars")
@@ -52,13 +59,12 @@ async def fifa_markets(
         response = []
 
         for event_ticker, outcomes in grouped.items():
-
             total_bid = sum(o["implied_bid_prob"] for o in outcomes)
             total_ask = sum(o["implied_ask_prob"] for o in outcomes)
 
             title = next(
                 (m["title"] for m in markets if m["event_ticker"] == event_ticker),
-                None
+                None,
             )
 
             response.append({
@@ -68,13 +74,14 @@ async def fifa_markets(
                 "total_ask_prob": round(total_ask, 4),
                 "overround_bid": round(total_bid - 1, 4),
                 "overround_ask": round(total_ask - 1, 4),
-                "outcomes": outcomes
+                "outcomes": outcomes,
             })
 
         return {
+            "sport": sport,
             "series_ticker": series_ticker,
             "match_count": len(response),
-            "matches": response
+            "matches": response,
         }
 
     finally:
@@ -83,10 +90,12 @@ async def fifa_markets(
 
 @router.get("/fifa/analysis")
 async def fifa_analysis(
-    series_ticker: str = "KXWCGAME",
     status: str = "open",
     client: KalshiClient = Depends(get_kalshi_client),
 ):
+    sport = "fifa"
+    series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
+
     try:
         data = await client.get_markets(
             series_ticker=series_ticker,
@@ -107,6 +116,7 @@ async def fifa_analysis(
                 sportsbook_events=sportsbook_events,
                 client=client,
                 odds_client=odds_client,
+                sport=sport,
             )
 
             if (
@@ -123,19 +133,23 @@ async def fifa_analysis(
             })
 
         return {
+            "sport": sport,
             "match_count": len(response),
-            "matches": response
+            "matches": response,
         }
 
     finally:
         await client.close()
 
+
 @router.get("/fifa/matches")
 async def fifa_matches(
-    series_ticker: str = "KXWCGAME",
     status: str = "open",
     client: KalshiClient = Depends(get_kalshi_client),
 ):
+    sport = "fifa"
+    series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
+
     try:
         data = await client.get_markets(
             series_ticker=series_ticker,
@@ -156,6 +170,7 @@ async def fifa_matches(
                 sportsbook_events=sportsbook_events,
                 client=client,
                 odds_client=odds_client,
+                sport=sport,
             )
 
             if (
@@ -176,7 +191,7 @@ async def fifa_matches(
             if positive_outcomes:
                 best_outcome = max(
                     positive_outcomes,
-                    key=lambda x: x["expected_value"]
+                    key=lambda x: x["expected_value"],
                 )
                 top_ev = best_outcome["expected_value"]
                 best_signal = best_outcome["signal"]
@@ -186,6 +201,7 @@ async def fifa_matches(
 
             matches.append({
                 "match_id": event_ticker,
+                "sport": sport,
                 "home_team": home_team,
                 "away_team": away_team,
                 "match_title": match_title,
@@ -201,20 +217,24 @@ async def fifa_matches(
         )
 
         return {
+            "sport": sport,
             "match_count": len(matches),
-            "matches": matches
+            "matches": matches,
         }
 
     finally:
         await client.close()
-# AFTER (fixed):
+
+
 @router.get("/fifa/match/{match_id}")
 async def fifa_match_detail(
     match_id: str,
-    series_ticker: str = "KXWCGAME",
     status: str = "open",
     client: KalshiClient = Depends(get_kalshi_client),
 ):
+    sport = "fifa"
+    series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
+
     try:
         data = await client.get_markets(
             series_ticker=series_ticker,
@@ -230,17 +250,20 @@ async def fifa_match_detail(
             sportsbook_events=sportsbook_events,
             client=client,
             odds_client=odds_client,
+            sport=sport,
         )
     finally:
         await client.close()
-        
+
+
 @router.get("/fifa/top-signals")
 async def fifa_top_signals(
     min_ev: float = 0.0,
     limit: int = 10,
     hours: int = 6,
 ):
-    data = get_match_history_for_all(hours)
+    sport = "fifa"
+    data = get_match_history_for_all(hours, sport=sport)
 
     signals = []
 
@@ -256,13 +279,14 @@ async def fifa_top_signals(
             continue
 
         composite_score = (
-            abs(latest_ev) * 0.6 +
-            team_data.get("confidence_score", 0) * 0.3 +
-            team_data.get("liquidity_score", 0) * 0.1
+            abs(latest_ev) * 0.6
+            + team_data.get("confidence_score", 0) * 0.3
+            + team_data.get("liquidity_score", 0) * 0.1
         )
 
         signals.append({
             "match_id": team_data["match_id"],
+            "sport": sport,
             "match": team_data["match"],
             "team": team_data["team"],
             "expected_value": latest_ev,
@@ -274,29 +298,33 @@ async def fifa_top_signals(
     signals.sort(key=lambda x: x["composite_score"], reverse=True)
 
     return {
+        "sport": sport,
         "signal_count": len(signals),
-        "top_signals": signals[:limit]
+        "top_signals": signals[:limit],
     }
+
 
 @router.get("/fifa/match/{match_id}/history")
 async def fifa_match_history(match_id: str, hours: int = 6):
-    data = get_match_history(match_id, hours)
+    sport = "fifa"
+    data = get_match_history(match_id, hours, sport=sport)
 
     return {
+        "sport": sport,
         "match_id": match_id,
         "window_hours": hours,
-        "teams": data
+        "teams": data,
     }
+
 
 @router.get("/fifa/ev-movers")
 async def fifa_ev_movers(hours: int = 6, limit: int = 10):
-
-    data = get_match_history_for_all(hours)
+    sport = "fifa"
+    data = get_match_history_for_all(hours, sport=sport)
 
     movers = []
 
     for team_data in data:
-
         ev_series = team_data["ev_series"]
 
         if len(ev_series) < 2:
@@ -306,33 +334,32 @@ async def fifa_ev_movers(hours: int = 6, limit: int = 10):
 
         movers.append({
             "match_id": team_data["match_id"],
+            "sport": sport,
             "match": team_data["match"],
             "team": team_data["team"],
-            "ev_change": ev_change
+            "ev_change": ev_change,
         })
-
-        movers = sorted(
-            movers,
-            key=lambda x: abs(x["ev_change"]),
-            reverse=True
-        )
 
     movers.sort(
         key=lambda x: abs(x["ev_change"]),
-        reverse=True
+        reverse=True,
     )
 
     return {
+        "sport": sport,
         "count": len(movers),
-        "movers": movers[:limit]
+        "movers": movers[:limit],
     }
+
 
 @router.get("/fifa/opportunities")
 async def fifa_opportunities(
-    series_ticker: str = "KXWCGAME",
     status: str = "open",
     client: KalshiClient = Depends(get_kalshi_client),
 ):
+    sport = "fifa"
+    series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
+
     try:
         data = await client.get_markets(
             series_ticker=series_ticker,
@@ -355,6 +382,7 @@ async def fifa_opportunities(
                 sportsbook_events=sportsbook_events,
                 client=client,
                 odds_client=odds_client,
+                sport=sport,
             )
 
             if (
@@ -377,11 +405,12 @@ async def fifa_opportunities(
             if positive_outcomes:
                 best_outcome = max(
                     positive_outcomes,
-                    key=lambda x: x["expected_value"]
+                    key=lambda x: x["expected_value"],
                 )
 
                 positive_opportunities.append({
                     "match_id": event_ticker,
+                    "sport": sport,
                     "match_title": match_title,
                     "outcome_team": best_outcome["team"],
                     "expected_value": best_outcome["expected_value"],
@@ -394,11 +423,12 @@ async def fifa_opportunities(
             else:
                 worst_outcome = min(
                     analysis_outcomes,
-                    key=lambda x: x["expected_value"]
+                    key=lambda x: x["expected_value"],
                 )
 
                 negative_opportunities.append({
                     "match_id": event_ticker,
+                    "sport": sport,
                     "match_title": match_title,
                     "outcome_team": worst_outcome["team"],
                     "expected_value": worst_outcome["expected_value"],
@@ -411,15 +441,16 @@ async def fifa_opportunities(
 
         positive_opportunities.sort(
             key=lambda x: x["expected_value"],
-            reverse=True
+            reverse=True,
         )
         negative_opportunities.sort(
-            key=lambda x: x["expected_value"]
+            key=lambda x: x["expected_value"],
         )
 
         best_positive = positive_opportunities[0] if positive_opportunities else None
 
         return {
+            "sport": sport,
             "best_positive": best_positive,
             "positive_count": len(positive_opportunities),
             "negative_count": len(negative_opportunities),

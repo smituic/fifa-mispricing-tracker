@@ -2,7 +2,7 @@ import sqlite3
 import asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict
-from app.core.config import settings
+from app.core.config import settings, SPORTS_CONFIG, DEFAULT_SPORT
 from app.services.match_analysis_service import build_match_analysis
 from app.services.kalshi_client import KalshiClient
 from app.services.odds_client import OddsClient
@@ -12,14 +12,17 @@ DB_PATH = "fifa_tracker.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    # ✅ WAL mode: allows reads while writing, much safer for concurrent access
+    # WAL mode: allows reads while writing, much safer for concurrent access
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     cursor = conn.cursor()
 
+    # Create table with sport column included for fresh databases.
+    # Existing databases will be migrated below.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sport TEXT NOT NULL DEFAULT 'fifa',
             timestamp TEXT,
             match_id TEXT,
             team TEXT,
@@ -34,22 +37,42 @@ def init_db():
             open_interest INTEGER
         )
     """)
+
+    # Migration: add `sport` column to pre-existing tables that lack it.
+    # This is idempotent — safe to run on every startup.
+    cursor.execute("PRAGMA table_info(snapshots)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if "sport" not in existing_columns:
+        print("Migrating snapshots table: adding 'sport' column (default 'fifa')")
+        cursor.execute(
+            "ALTER TABLE snapshots ADD COLUMN sport TEXT NOT NULL DEFAULT 'fifa'"
+        )
+
+    # Indexes — note the new (sport, match_id, timestamp) index for fast
+    # per-sport history queries.
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_snapshots_match_time
         ON snapshots(match_id, timestamp)
     """)
     cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_snapshots_sport_match_time
+        ON snapshots(sport, match_id, timestamp)
+    """)
+    cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_snapshots_team
         ON snapshots(team)
     """)
+
     conn.commit()
     conn.close()
 
 
 def _save_snapshot_rows_bulk(rows: list[dict]):
     """
-    ✅ Single connection, single transaction for ALL rows in a cycle.
+    Single connection, single transaction for ALL rows in a cycle.
     Called via run_in_executor so it never blocks the event loop.
+
+    Each row dict must include a 'sport' key.
     """
     if not rows:
         return
@@ -60,13 +83,13 @@ def _save_snapshot_rows_bulk(rows: list[dict]):
 
     cursor.executemany("""
         INSERT INTO snapshots (
-            timestamp, match_id, team,
+            sport, timestamp, match_id, team,
             ask_probability, bid_probability, mid_price,
             fair_probability, expected_value,
             liquidity_score, confidence_score,
             volume, open_interest
         ) VALUES (
-            :timestamp, :match_id, :team,
+            :sport, :timestamp, :match_id, :team,
             :ask_probability, :bid_probability, :mid_price,
             :fair_probability, :expected_value,
             :liquidity_score, :confidence_score,
@@ -100,15 +123,30 @@ def normalize_team_name(name: str) -> str:
     if not name:
         return name
     return TEAM_NAME_MAP.get(name, name)
-async def snapshot_all_matches():
-    # ✅ One shared client for the entire cycle, not one per match
+
+
+async def snapshot_all_matches(sport: str = DEFAULT_SPORT):
+    """
+    Run one snapshot cycle for a given sport.
+
+    Looks up the sport's Kalshi series_ticker from SPORTS_CONFIG,
+    fetches markets, runs analysis, and persists snapshots tagged with sport.
+    """
+    sport_config = SPORTS_CONFIG.get(sport)
+    if sport_config is None:
+        print(f"Unknown sport '{sport}' — skipping snapshot cycle")
+        return
+
+    series_ticker = sport_config["kalshi_series_ticker"]
+
+    # One shared client for the entire cycle, not one per match
     client = KalshiClient(base_url=settings.KALSHI_BASE_URL)
     odds_client = OddsClient()
 
     try:
-        print("Fetching markets...")
+        print(f"[{sport}] Fetching markets (series={series_ticker})...")
         data = await client.get_markets(
-            series_ticker="KXWCGAME",
+            series_ticker=series_ticker,
             status="open",
             limit=200,
         )
@@ -116,26 +154,26 @@ async def snapshot_all_matches():
         markets = data.get("markets", [])
         match_ids = list(set(m["event_ticker"] for m in markets))
 
-        print("Fetching sportsbook events...")
+        print(f"[{sport}] Fetching sportsbook events...")
         sportsbook_events = await odds_client.fetch_events()
 
-        print(f"Total matches: {len(match_ids)}")
+        print(f"[{sport}] Total matches: {len(match_ids)}")
 
-        # ✅ Pass shared clients into each task — no more per-match instantiation
+        # Pass shared clients into each task — no more per-match instantiation
         tasks = [
             build_match_analysis(
                 match_id,
                 markets,
                 sportsbook_events,
-                client=client,          # shared
-                odds_client=odds_client # shared
+                client=client,
+                odds_client=odds_client,
             )
             for match_id in match_ids
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # ✅ Collect ALL rows first, then write in one bulk transaction
+        # Collect ALL rows first, then write in one bulk transaction
         rows_to_insert = []
         now = datetime.utcnow().isoformat()
 
@@ -147,7 +185,7 @@ async def snapshot_all_matches():
                 or "analysis" not in analysis
             ):
                 if isinstance(analysis, Exception):
-                    print(f"Match analysis error: {analysis}")
+                    print(f"[{sport}] Match analysis error: {analysis}")
                 continue
 
             kalshi_outcomes = analysis["kalshi"]["outcomes"]
@@ -162,6 +200,7 @@ async def snapshot_all_matches():
                     continue
 
                 rows_to_insert.append({
+                    "sport": sport,
                     "timestamp": now,
                     "match_id": analysis["match_id"],
                     "team": team,
@@ -178,37 +217,71 @@ async def snapshot_all_matches():
 
         # One single async-safe bulk write for the whole cycle
         await save_snapshot_rows_async(rows_to_insert)
-        print(f"✅ Saved {len(rows_to_insert)} snapshot rows")
+        print(f"[{sport}] Saved {len(rows_to_insert)} snapshot rows")
 
     finally:
         await client.close()
 
 
 async def start_snapshot_loop():
+    """
+    Main snapshot loop. Iterates over every sport with status='live'
+    in SPORTS_CONFIG and runs a snapshot cycle for each.
+
+    Currently only FIFA is live. Adding new live sports is a config-only
+    change in app/core/config.py.
+    """
     while True:
-        print("Running snapshot cycle...")
-        try:
-            await snapshot_all_matches()
-        except Exception as e:
-            print(f"Snapshot cycle failed: {e}")
+        live_sports = [
+            sport for sport, cfg in SPORTS_CONFIG.items()
+            if cfg.get("status") == "live"
+        ]
+
+        if not live_sports:
+            print("No live sports configured — sleeping")
+        else:
+            print(f"Running snapshot cycle for sports: {live_sports}")
+            for sport in live_sports:
+                try:
+                    await snapshot_all_matches(sport=sport)
+                except Exception as e:
+                    print(f"[{sport}] Snapshot cycle failed: {e}")
+
         await asyncio.sleep(7200)
 
 
 # ── Read helpers (unchanged logic, same signatures) ──────────────────────────
 
-def get_match_history(match_id: str, hours: int = 6):
+def get_match_history(match_id: str, hours: int = 6, sport: str | None = None):
+    """
+    Get per-team snapshot history for one match within the time window.
+
+    If `sport` is provided, filter to that sport. If None, returns rows
+    regardless of sport (backward-compatible behavior).
+    """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cutoff_iso = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-    cursor.execute("""
-        SELECT timestamp, team, ask_probability, bid_probability, mid_price,
-               fair_probability, expected_value, liquidity_score,
-               confidence_score, volume, open_interest
-        FROM snapshots
-        WHERE match_id = ? AND timestamp >= ?
-        ORDER BY timestamp ASC
-    """, (match_id, cutoff_iso))
+
+    if sport is not None:
+        cursor.execute("""
+            SELECT timestamp, team, ask_probability, bid_probability, mid_price,
+                   fair_probability, expected_value, liquidity_score,
+                   confidence_score, volume, open_interest
+            FROM snapshots
+            WHERE sport = ? AND match_id = ? AND timestamp >= ?
+            ORDER BY timestamp ASC
+        """, (sport, match_id, cutoff_iso))
+    else:
+        cursor.execute("""
+            SELECT timestamp, team, ask_probability, bid_probability, mid_price,
+                   fair_probability, expected_value, liquidity_score,
+                   confidence_score, volume, open_interest
+            FROM snapshots
+            WHERE match_id = ? AND timestamp >= ?
+            ORDER BY timestamp ASC
+        """, (match_id, cutoff_iso))
 
     rows = cursor.fetchall()
     conn.close()
@@ -239,18 +312,34 @@ def get_match_history(match_id: str, hours: int = 6):
     return grouped
 
 
-def get_match_history_for_all(hours: int):
+def get_match_history_for_all(hours: int, sport: str | None = None):
+    """
+    Get latest EV per (match, team) across all matches in the time window.
+
+    If `sport` is provided, filter to that sport. If None, returns rows
+    regardless of sport (backward-compatible behavior).
+    """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-    cursor.execute("""
-        SELECT match_id, team, timestamp, expected_value,
-               confidence_score, liquidity_score
-        FROM snapshots
-        WHERE timestamp >= ?
-        ORDER BY timestamp ASC
-    """, (cutoff,))
+
+    if sport is not None:
+        cursor.execute("""
+            SELECT match_id, team, timestamp, expected_value,
+                   confidence_score, liquidity_score
+            FROM snapshots
+            WHERE sport = ? AND timestamp >= ?
+            ORDER BY timestamp ASC
+        """, (sport, cutoff))
+    else:
+        cursor.execute("""
+            SELECT match_id, team, timestamp, expected_value,
+                   confidence_score, liquidity_score
+            FROM snapshots
+            WHERE timestamp >= ?
+            ORDER BY timestamp ASC
+        """, (cutoff,))
 
     rows = cursor.fetchall()
     conn.close()
@@ -268,10 +357,9 @@ def get_match_history_for_all(hours: int):
         match_teams[match_id].add(team)
 
     results = []
-    # AFTER:
     for (match_id, team), history in team_series.items():
         teams = sorted(list(match_teams[match_id]))
-        history.sort(key=lambda r: r["timestamp"])  # ← ADD THIS
+        history.sort(key=lambda r: r["timestamp"])
         latest = history[-1]
         results.append({
             "match_id": match_id,

@@ -2,6 +2,7 @@ from app.services.kalshi_client import KalshiClient
 from app.services.odds_client import OddsClient
 from app.services.sportsbook_fair_model import SportsbookConsensusModel
 from app.services.mispricing import MispricingEngine
+from app.core.config import DEFAULT_SPORT
 
 print("LOADING MATCH ANALYSIS...")
 
@@ -57,8 +58,9 @@ async def build_match_analysis(
     sportsbook_events: list,
     series_ticker: str = "KXWCGAME",
     status: str = "open",
-    client: KalshiClient | None = None,       # ✅ accept shared client
-    odds_client: OddsClient | None = None,    # ✅ accept shared client
+    client: KalshiClient | None = None,
+    odds_client: OddsClient | None = None,
+    sport: str = DEFAULT_SPORT,
 ):
     print(f"Processing match: {match_id}")
 
@@ -164,6 +166,7 @@ async def build_match_analysis(
             print(f"⚠️ No fair data for {home_team} vs {away_team}")
 
             return {
+                "sport": sport,
                 "match_id": match_id,
                 "match_title": clean_title,
                 "kalshi": {"outcomes": grouped_outcomes},
@@ -208,6 +211,7 @@ async def build_match_analysis(
         )
 
         return {
+            "sport": sport,
             "match_id": match_id,
             "match_title": clean_title,
             "home_team": home_team,

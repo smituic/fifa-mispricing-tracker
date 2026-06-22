@@ -2,7 +2,8 @@ from app.services.kalshi_client import KalshiClient
 from app.services.odds_client import OddsClient
 from app.services.sportsbook_fair_model import SportsbookConsensusModel
 from app.services.mispricing import MispricingEngine
-from app.core.config import DEFAULT_SPORT
+from app.core.config import DEFAULT_SPORT, SPORTS_CONFIG
+
 
 print("LOADING MATCH ANALYSIS...")
 
@@ -161,7 +162,15 @@ async def build_match_analysis(
             print("❌ FAILED MATCH:", home_team, "vs", away_team)
             return {"detail": "No matching sportsbook event found"}
 
-        sportsbook_fair = fair_model.compute_fair_probabilities(sportsbook_event)
+        # Look up market_type from the sport's config
+        from app.core.config import SPORTS_CONFIG
+        market_type = SPORTS_CONFIG.get(sport, {}).get("market_type", "3way")
+
+        sportsbook_fair = fair_model.compute_fair_probabilities(
+            sportsbook_event,
+            market_type=market_type,
+        )
+
         if not sportsbook_fair:
             print(f"⚠️ No fair data for {home_team} vs {away_team}")
 

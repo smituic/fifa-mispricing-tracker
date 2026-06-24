@@ -1,7 +1,7 @@
 import httpx
 import time
 from difflib import SequenceMatcher
-from app.core.config import settings
+from app.core.config import settings, SPORTS_CONFIG, DEFAULT_SPORT
 
 
 TEAM_ALIASES = {
@@ -117,18 +117,37 @@ def normalize_team_name(name: str) -> str:
 
 
 class OddsClient:
-    BASE_URL = "https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds"
+    """
+    Wrapper around The Odds API h2h odds for a single sport.
 
-    _cache_data = None
-    _cache_timestamp = 0
-    _cache_ttl = 900
+    Instantiated once per sport per snapshot cycle. Each instance owns its
+    own 15-minute cache (was previously class-level, which meant different
+    sports could clobber each other's caches once MLB came online).
+    """
+    _BASE_URL_FMT = "https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+
+    def __init__(self, sport: str = DEFAULT_SPORT, sport_key: str | None = None):
+        # sport_key wins if explicit; otherwise derive from sport via SPORTS_CONFIG
+        if sport_key is None:
+            sport_key = SPORTS_CONFIG.get(sport, {}).get("odds_api_sport_key")
+            if not sport_key:
+                raise ValueError(f"No odds_api_sport_key configured for sport='{sport}'")
+
+        self.sport = sport
+        self.sport_key = sport_key
+        self.base_url = self._BASE_URL_FMT.format(sport_key=sport_key)
+
+        # Per-instance cache (was class-level)
+        self._cache_data = None
+        self._cache_timestamp = 0
+        self._cache_ttl = 900
 
     async def fetch_events(self):
-        print("➡️ Calling Odds API...")
+        print(f"➡️  Calling Odds API ({self.sport_key})...")
 
         now = time.time()
         if self._cache_data is not None and now - self._cache_timestamp < self._cache_ttl:
-            print("⚡ Using cached sportsbook data")
+            print(f"⚡ Using cached sportsbook data for {self.sport_key}")
             return self._cache_data
 
         params = {
@@ -140,13 +159,13 @@ class OddsClient:
 
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
-                response = await client.get(self.BASE_URL, params=params)
+                response = await client.get(self.base_url, params=params)
 
-            print("✅ Odds API responded")
+            print(f"✅ Odds API responded ({self.sport_key})")
             response.raise_for_status()
             data = response.json()
 
-            print("📋 Sportsbook events available:")
+            print(f"📋 Sportsbook events available ({self.sport_key}):")
             for e in data:
                 print(f"   {e.get('home_team')} vs {e.get('away_team')}")
 
@@ -155,10 +174,12 @@ class OddsClient:
             return data
 
         except Exception as e:
-            print("❌ Odds API FAILED:", e)
+            print(f"❌ Odds API FAILED ({self.sport_key}):", e)
             return []
 
     def match_event(self, events: list, home_team: str, away_team: str):
+        """Fuzzy name-based matching. FIFA path only — MLB uses code-based
+        resolution in match_analysis_service.py and bypasses this."""
         best_match = None
         best_score = 0.0
 
@@ -192,7 +213,6 @@ class OddsClient:
                     best_score = score
                     best_match = event
 
-        # ✅ FIXED: fallback is OUTSIDE the loop (was incorrectly indented inside before)
         if not best_match and best_score > 1.5:
             print(f"⚡ Using fuzzy fallback for: {home_team} vs {away_team}")
             return best_match

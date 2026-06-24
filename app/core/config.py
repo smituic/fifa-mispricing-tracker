@@ -51,7 +51,15 @@ SPORTS_CONFIG: dict[str, dict] = {
         "status": "live",
         "active_through": "2026-07-19",   # World Cup final
     },
-    # Future sports will be added here (mlb, nfl, nba, nhl, etc.)
+    "mlb": {
+        "name": "Major League Baseball",
+        "short_name": "MLB",
+        "kalshi_series_ticker": "KXMLBGAME",
+        "odds_api_sport_key": "baseball_mlb",
+        "market_type": "2way",            # home / away (moneyline)
+        "status": "live",                 # season in progress
+        "active_through": "2026-11-05",   # ~World Series end
+    },
 }
 
 # Default sport for backward-compatible behavior in routes and helpers

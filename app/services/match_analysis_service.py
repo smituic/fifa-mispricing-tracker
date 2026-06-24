@@ -57,32 +57,72 @@ async def build_match_analysis(
     match_id: str,
     markets: list,
     sportsbook_events: list,
-    series_ticker: str = "KXWCGAME",
+    series_ticker: str = "KXWCGAME",  # legacy; unused, kept for back-compat
     status: str = "open",
     client: KalshiClient | None = None,
     odds_client: OddsClient | None = None,
     sport: str = DEFAULT_SPORT,
 ):
-    print(f"Processing match: {match_id}")
+    print(f"Processing match: {match_id} (sport={sport})")
 
-    # ✅ Only create clients if not passed in (keeps backward compat)
     _own_client = client is None
     _own_odds = odds_client is None
     if _own_client:
         from app.core.dependencies import get_kalshi_client
         client = get_kalshi_client()
     if _own_odds:
-        odds_client = OddsClient()
+        odds_client = OddsClient(sport=sport)
 
     fair_model = SportsbookConsensusModel()
     engine = MispricingEngine()
 
     try:
         event_markets = [m for m in markets if m["event_ticker"] == match_id]
-
         if not event_markets:
             return {"detail": "Match not found"}
 
+        # ── Sport-aware team identification ─────────────────────────────────
+        away_name_resolved = None
+        home_name_resolved = None
+
+        if sport == "mlb":
+            from app.services.team_name_maps import (
+                parse_event_ticker, codes_to_names, SPORT_CODE_SETS,
+            )
+
+            parsed = parse_event_ticker(match_id, SPORT_CODE_SETS["mlb"])
+            if not parsed:
+                print(f"❌ MLB ticker parse failed: {match_id}")
+                return {"detail": f"Could not parse MLB event_ticker: {match_id}"}
+
+            away_code, home_code = parsed
+            away_name_resolved, home_name_resolved = codes_to_names(
+                away_code, home_code, sport="mlb"
+            )
+            if not (away_name_resolved and home_name_resolved):
+                print(f"❌ MLB unknown code(s) in {match_id}: away={away_code} home={home_code}")
+                return {
+                    "detail": f"Unknown MLB team codes: {away_code}/{home_code}"
+                }
+
+            home_team = home_name_resolved
+            away_team = away_name_resolved
+            # Kalshi convention is away-first display
+            clean_title = f"{away_team} vs {home_team}"
+
+        else:
+            # FIFA: parse from market title ("Home vs Away Winner?")
+            title = event_markets[0].get("title")
+            if not title or " vs " not in title:
+                return {"detail": "Invalid match title format"}
+
+            clean_title = title.replace(" Winner?", "").strip()
+            home_team, away_team = clean_title.split(" vs ")
+            home_team = normalize_team_name(home_team)
+            away_team = normalize_team_name(away_team)
+            clean_title = f"{home_team} vs {away_team}"
+
+        # ── Build grouped outcomes from Kalshi markets ──────────────────────
         grouped_outcomes = []
 
         for market in event_markets:
@@ -110,24 +150,25 @@ async def build_match_analysis(
             volume_score = min(volume / 200, 1)
             open_interest_score = min(open_interest / 200, 1)
             spread_score = 1 - min(spread_pct / 1, 1)
-            liquidity_score = round(
-                (volume_score * 0.4 + open_interest_score * 0.4 + spread_score * 0.2) * 10, 2
-            )
-            raw_team = market.get("yes_sub_title")
-            normalized_team = normalize_team_name(raw_team)
-
-            if normalized_team == "Tie":
-                normalized_team = "Draw"
 
             liquidity_score = clamp_score(
                 (volume_score * 0.4 + open_interest_score * 0.4 + spread_score * 0.2) * 10
             )
 
-            raw_team = market.get("yes_sub_title")
-            normalized_team = normalize_team_name(raw_team)
-
-            if normalized_team == "Tie":
-                normalized_team = "Draw"
+            # Sport-aware outcome team resolution
+            if sport == "mlb":
+                from app.services.team_name_maps import resolve_outcome_team
+                normalized_team = resolve_outcome_team(
+                    market, away_name_resolved, home_name_resolved, sport="mlb"
+                )
+                if not normalized_team:
+                    print(f"⚠️  Could not resolve MLB outcome for market {market.get('ticker')}")
+                    continue
+            else:
+                raw_team = market.get("yes_sub_title")
+                normalized_team = normalize_team_name(raw_team)
+                if normalized_team == "Tie":
+                    normalized_team = "Draw"
 
             grouped_outcomes.append({
                 "team": normalized_team,
@@ -143,37 +184,33 @@ async def build_match_analysis(
                 "implied_ask_prob": ask_prob,
             })
 
-        title = event_markets[0].get("title")
-        if not title or " vs " not in title:
-            return {"detail": "Invalid match title format"}
+        # ── Find sportsbook event ───────────────────────────────────────────
+        if sport == "mlb":
+            # Exact name match — codes_to_names returned Odds-API-canonical names
+            sportsbook_event = next(
+                (e for e in sportsbook_events
+                 if {e.get("home_team"), e.get("away_team")} == {home_team, away_team}),
+                None,
+            )
+        else:
+            sportsbook_event = odds_client.match_event(
+                sportsbook_events, home_team, away_team
+            )
 
-        clean_title = title.replace(" Winner?", "").strip()
-        home_team, away_team = clean_title.split(" vs ")
-
-        home_team = normalize_team_name(home_team)
-        away_team = normalize_team_name(away_team)
-        clean_title = f"{home_team} vs {away_team}"
-
-        sportsbook_event = odds_client.match_event(
-            sportsbook_events, home_team, away_team
-        )
-        print("🔍 TRY MATCH:", home_team, "vs", away_team)
+        print(f"🔍 TRY MATCH ({sport}):", home_team, "vs", away_team)
         if not sportsbook_event:
-            print("❌ FAILED MATCH:", home_team, "vs", away_team)
+            print(f"❌ FAILED MATCH ({sport}):", home_team, "vs", away_team)
             return {"detail": "No matching sportsbook event found"}
 
-        # Look up market_type from the sport's config
-        from app.core.config import SPORTS_CONFIG
+        # ── Fair probabilities (sport's market_type drives 2-way vs 3-way) ──
         market_type = SPORTS_CONFIG.get(sport, {}).get("market_type", "3way")
-
         sportsbook_fair = fair_model.compute_fair_probabilities(
             sportsbook_event,
             market_type=market_type,
         )
 
         if not sportsbook_fair:
-            print(f"⚠️ No fair data for {home_team} vs {away_team}")
-
+            print(f"⚠️  No fair data for {home_team} vs {away_team}")
             return {
                 "sport": sport,
                 "match_id": match_id,
@@ -183,7 +220,8 @@ async def build_match_analysis(
                 "analysis": {"outcomes": []},
             }
 
-        match_obj = {"match": title, "outcomes": grouped_outcomes}
+        # ── Mispricing engine + scoring ─────────────────────────────────────
+        match_obj = {"match": clean_title, "outcomes": grouped_outcomes}
         analysis = engine.analyze_match(match_obj, sportsbook_fair)
 
         book_count = len(sportsbook_event.get("bookmakers", []))
@@ -212,9 +250,9 @@ async def build_match_analysis(
 
         analysis.sort(
             key=lambda x: (
-                abs(x["expected_value"]) * 0.6 +
-                x["confidence_score"] * 0.3 +
-                x["liquidity_score"] * 0.1
+                abs(x["expected_value"]) * 0.6
+                + x["confidence_score"] * 0.3
+                + x["liquidity_score"] * 0.1
             ),
             reverse=True,
         )
@@ -231,7 +269,5 @@ async def build_match_analysis(
         }
 
     finally:
-        # ✅ Only close clients we created ourselves
         if _own_client:
             await client.close()
-        # OddsClient likely has no async close, skip it

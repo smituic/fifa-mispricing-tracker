@@ -141,7 +141,7 @@ async def snapshot_all_matches(sport: str = DEFAULT_SPORT):
 
     # One shared client for the entire cycle, not one per match
     client = KalshiClient(base_url=settings.KALSHI_BASE_URL)
-    odds_client = OddsClient()
+    odds_client = OddsClient(sport=sport)
 
     try:
         print(f"[{sport}] Fetching markets (series={series_ticker})...")
@@ -167,6 +167,7 @@ async def snapshot_all_matches(sport: str = DEFAULT_SPORT):
                 sportsbook_events,
                 client=client,
                 odds_client=odds_client,
+                sport=sport,
             )
             for match_id in match_ids
         ]

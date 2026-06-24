@@ -186,12 +186,80 @@ async def build_match_analysis(
 
         # ── Find sportsbook event ───────────────────────────────────────────
         if sport == "mlb":
-            # Exact name match — codes_to_names returned Odds-API-canonical names
-            sportsbook_event = next(
-                (e for e in sportsbook_events
-                 if {e.get("home_team"), e.get("away_team")} == {home_team, away_team}),
-                None,
-            )
+            # Match on team pair AND game date. Multiple events with the same
+            # team pair can appear in the Odds API response when consecutive-day
+            # series games are both listed (and the in-progress game stays in
+            # the feed with live odds until it ends). Without date filtering
+            # we'd grab today's live-odds event for tomorrow's Kalshi market.
+            from datetime import datetime, timedelta
+
+            target_pair = {home_team, away_team}
+
+            # Pull date from event_ticker: KXMLBGAME-26JUN251210KCTB -> 2026-06-25
+            # Pull full game datetime from event_ticker.
+            # KXMLBGAME-26JUN241910CHCNYM -> 2026-06-24 19:10 US/Eastern.
+            # Kalshi MLB tickers consistently use Eastern; we convert to UTC
+            # for direct comparison with Odds API commence_time.
+            kalshi_dt_utc = None
+            try:
+                from app.services.team_name_maps import _TICKER_DATE_RE
+                from zoneinfo import ZoneInfo
+
+                body = match_id.split("-", 1)[1]
+                m = _TICKER_DATE_RE.match(body)
+                if m:
+                    yy, mmm, dd, hhmm, _codes = m.groups()
+                    if hhmm:
+                        kalshi_dt_local = datetime.strptime(
+                            f"20{yy}-{mmm}-{dd} {hhmm}",
+                            "%Y-%b-%d %H%M",
+                        ).replace(tzinfo=ZoneInfo("America/New_York"))
+                        kalshi_dt_utc = kalshi_dt_local.astimezone(ZoneInfo("UTC"))
+                    else:
+                        # No time in ticker — fall back to noon ET that day
+                        kalshi_dt_local = datetime.strptime(
+                            f"20{yy}-{mmm}-{dd} 1200",
+                            "%Y-%b-%d %H%M",
+                        ).replace(tzinfo=ZoneInfo("America/New_York"))
+                        kalshi_dt_utc = kalshi_dt_local.astimezone(ZoneInfo("UTC"))
+            except Exception as e:
+                print(f"⚠️  Could not parse datetime from {match_id}: {e}")
+
+            candidates = [
+                e for e in sportsbook_events
+                if {e.get("home_team"), e.get("away_team")} == target_pair
+            ]
+
+            if kalshi_dt_utc and candidates:
+                # Match within ±6 hours of game time. Tight enough to rule out
+                # consecutive-day series games (and live in-game odds from
+                # earlier games), loose enough to handle minor schedule shifts.
+                MATCH_WINDOW = timedelta(hours=6)
+
+                def _time_distance(ev):
+                    ct = ev.get("commence_time")
+                    if not ct:
+                        return timedelta(days=999)
+                    try:
+                        ev_dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                        return abs(ev_dt - kalshi_dt_utc)
+                    except Exception:
+                        return timedelta(days=999)
+
+                candidates.sort(key=_time_distance)
+                if _time_distance(candidates[0]) <= MATCH_WINDOW:
+                    sportsbook_event = candidates[0]
+                else:
+                    # No candidate within the window — the Odds API hasn't
+                    # priced this future game yet, OR all matches are live
+                    # in-game snapshots of an earlier game in the series.
+                    sportsbook_event = None
+            elif candidates:
+                # No time parsed — fall back to first match (preserves FIFA
+                # behavior; FIFA tickers don't have time segments).
+                sportsbook_event = candidates[0]
+            else:
+                sportsbook_event = None
         else:
             sportsbook_event = odds_client.match_event(
                 sportsbook_events, home_team, away_team

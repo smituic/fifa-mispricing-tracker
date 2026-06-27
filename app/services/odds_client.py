@@ -1,7 +1,7 @@
 import httpx
 import time
 from difflib import SequenceMatcher
-from app.core.config import settings, SPORTS_CONFIG, DEFAULT_SPORT
+from app.core.config import settings, SPORTS_CONFIG, DEFAULT_SPORT, get_odds_api_key
 
 
 TEAM_ALIASES = {
@@ -137,6 +137,9 @@ class OddsClient:
         self.sport_key = sport_key
         self.base_url = self._BASE_URL_FMT.format(sport_key=sport_key)
 
+        # Per-sport API key (falls back to shared ODDS_API_KEY)
+        self.api_key = get_odds_api_key(sport)
+
         # Per-instance cache (was class-level)
         self._cache_data = None
         self._cache_timestamp = 0
@@ -151,7 +154,7 @@ class OddsClient:
             return self._cache_data
 
         params = {
-            "apiKey": settings.ODDS_API_KEY,
+            "apiKey": self.api_key,
             "regions": "us",
             "markets": "h2h",
             "oddsFormat": "decimal",

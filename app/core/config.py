@@ -14,6 +14,8 @@ class Settings(BaseSettings):
 
     # Odds API key
     ODDS_API_KEY: str
+    ODDS_API_KEY_FIFA: str | None = None
+    ODDS_API_KEY_MLB: str | None = None
 
     # Minimum EV threshold for signal classification
     MIN_EV_SIGNAL: float = 0.01
@@ -64,3 +66,15 @@ SPORTS_CONFIG: dict[str, dict] = {
 
 # Default sport for backward-compatible behavior in routes and helpers
 DEFAULT_SPORT = "fifa"
+
+
+
+def get_odds_api_key(sport: str) -> str:
+    """Return the Odds API key for a sport.
+
+    Prefers a sport-specific key (ODDS_API_KEY_<SPORT>) if set, otherwise
+    falls back to the shared ODDS_API_KEY. This lets each sport run on its
+    own free-tier key while keeping unconfigured sports working.
+    """
+    per_sport = getattr(settings, f"ODDS_API_KEY_{sport.upper()}", None)
+    return per_sport or settings.ODDS_API_KEY

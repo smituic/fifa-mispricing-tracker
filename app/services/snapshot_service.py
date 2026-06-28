@@ -359,7 +359,7 @@ def get_match_history_for_all(hours: int, sport: str | None = None):
 
     results = []
     for (match_id, team), history in team_series.items():
-        teams = sorted(list(match_teams[match_id]))
+        teams = [t for t in sorted(match_teams[match_id]) if t not in ("Draw", "Tie")]
         history.sort(key=lambda r: r["timestamp"])
         latest = history[-1]
         results.append({

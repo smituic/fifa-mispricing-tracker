@@ -63,6 +63,28 @@ def init_db():
         ON snapshots(team)
     """)
 
+    # Match metadata: title and home/away per match.
+    #
+    # The snapshots table only stores match_id + team, so once a sport's
+    # markets close on Kalshi we lose the ability to reconstruct match
+    # titles (they only exist in the live Kalshi response). Archive mode
+    # reads this table to render historical matches properly.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS match_metadata (
+            sport TEXT NOT NULL,
+            match_id TEXT NOT NULL,
+            title TEXT,
+            home_team TEXT,
+            away_team TEXT,
+            last_seen TEXT,
+            PRIMARY KEY (sport, match_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_match_metadata_sport
+        ON match_metadata(sport)
+    """)
+
     conn.commit()
     conn.close()
 
@@ -108,6 +130,43 @@ async def save_snapshot_rows_async(rows: list[dict]):
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _save_snapshot_rows_bulk, rows)
+
+
+def _save_match_metadata_bulk(rows: list[dict]):
+    """
+    Upsert match metadata for a snapshot cycle.
+
+    COALESCE on update so a cycle that lacks home/away (e.g. a match with no
+    sportsbook data that round) never overwrites values captured earlier.
+    """
+    if not rows:
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    cursor = conn.cursor()
+
+    cursor.executemany("""
+        INSERT INTO match_metadata (
+            sport, match_id, title, home_team, away_team, last_seen
+        ) VALUES (
+            :sport, :match_id, :title, :home_team, :away_team, :last_seen
+        )
+        ON CONFLICT(sport, match_id) DO UPDATE SET
+            title     = COALESCE(excluded.title, match_metadata.title),
+            home_team = COALESCE(excluded.home_team, match_metadata.home_team),
+            away_team = COALESCE(excluded.away_team, match_metadata.away_team),
+            last_seen = excluded.last_seen
+    """, rows)
+
+    conn.commit()
+    conn.close()
+
+
+async def save_match_metadata_async(rows: list[dict]):
+    """Offload the blocking metadata upsert to a thread."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _save_match_metadata_bulk, rows)
 
 
 TEAM_NAME_MAP = {
@@ -176,6 +235,7 @@ async def snapshot_all_matches(sport: str = DEFAULT_SPORT):
 
         # Collect ALL rows first, then write in one bulk transaction
         rows_to_insert = []
+        metadata_rows = []
         now = datetime.utcnow().isoformat()
 
         for analysis in results:
@@ -188,6 +248,18 @@ async def snapshot_all_matches(sport: str = DEFAULT_SPORT):
                 if isinstance(analysis, Exception):
                     print(f"[{sport}] Match analysis error: {analysis}")
                 continue
+
+            # Capture title/home/away for archive mode. Runs before the
+            # outcome loop so matches with no fair data still record a title.
+            if analysis.get("match_title"):
+                metadata_rows.append({
+                    "sport": sport,
+                    "match_id": analysis["match_id"],
+                    "title": analysis.get("match_title"),
+                    "home_team": analysis.get("home_team"),
+                    "away_team": analysis.get("away_team"),
+                    "last_seen": now,
+                })
 
             kalshi_outcomes = analysis["kalshi"]["outcomes"]
             analysis_outcomes = analysis["analysis"]["outcomes"]
@@ -216,9 +288,13 @@ async def snapshot_all_matches(sport: str = DEFAULT_SPORT):
                     "open_interest": kalshi_data.get("open_interest"),
                 })
 
-        # One single async-safe bulk write for the whole cycle
+       # One single async-safe bulk write for the whole cycle
         await save_snapshot_rows_async(rows_to_insert)
-        print(f"[{sport}] Saved {len(rows_to_insert)} snapshot rows")
+        await save_match_metadata_async(metadata_rows)
+        print(
+            f"[{sport}] Saved {len(rows_to_insert)} snapshot rows, "
+            f"{len(metadata_rows)} metadata rows"
+        )
 
     finally:
         await client.close()

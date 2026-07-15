@@ -166,6 +166,13 @@ async def build_match_analysis(
                     continue
             else:
                 raw_team = market.get("yes_sub_title")
+                # Kalshi prefixes knockout-match subtitles with "Reg Time: "
+                # (e.g. "Reg Time: Spain") because knockouts continue into
+                # extra time and penalties. The tradeable market is still the
+                # 90-minute result, which is exactly what the Odds API's 3-way
+                # h2h prices — so strip the prefix and compare directly.
+                if raw_team and raw_team.startswith("Reg Time: "):
+                    raw_team = raw_team[len("Reg Time: "):]
                 normalized_team = normalize_team_name(raw_team)
                 if normalized_team == "Tie":
                     normalized_team = "Draw"
@@ -291,6 +298,17 @@ async def build_match_analysis(
         # ── Mispricing engine + scoring ─────────────────────────────────────
         match_obj = {"match": clean_title, "outcomes": grouped_outcomes}
         analysis = engine.analyze_match(match_obj, sportsbook_fair)
+
+        # Loud failure: we had fair probabilities but matched no outcomes,
+        # which means Kalshi outcome labels don't align with Odds API team
+        # names. Silent [] here is how the "Reg Time:" prefix bug went
+        # unnoticed through the entire knockout stage.
+        if not analysis and grouped_outcomes:
+            print(
+                f"⚠️  {sport}: 0 outcomes matched for {clean_title} — "
+                f"kalshi={[o['team'] for o in grouped_outcomes]} "
+                f"fair={list(sportsbook_fair.keys())}"
+            )
 
         book_count = len(sportsbook_event.get("bookmakers", []))
 

@@ -8,6 +8,16 @@ from app.services.kalshi_client import KalshiClient
 from app.services.match_analysis_service import build_match_analysis
 from app.services.odds_client import OddsClient
 from app.services.snapshot_service import get_match_history, get_match_history_for_all
+from app.services.archive_service import (
+    get_archive_matches,
+    get_archive_opportunities,
+    get_archive_match_detail,
+)
+
+
+def _is_archive(sport: str) -> bool:
+    """Archived sports have no open Kalshi markets — read stored snapshots."""
+    return SPORTS_CONFIG.get(sport, {}).get("status") == "archive"
 
 router = APIRouter()
 
@@ -152,6 +162,9 @@ async def fifa_matches(
     series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
 
     try:
+        if _is_archive(sport):
+            return get_archive_matches(sport)
+
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,
@@ -237,6 +250,9 @@ async def fifa_match_detail(
     series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
 
     try:
+        if _is_archive(sport):
+            return get_archive_match_detail(sport, match_id)
+
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,
@@ -362,6 +378,9 @@ async def fifa_opportunities(
     series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
 
     try:
+        if _is_archive(sport):
+            return get_archive_opportunities(sport)
+        
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,
@@ -604,6 +623,9 @@ async def mlb_matches(
     series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
 
     try:
+        if _is_archive(sport):
+            return get_archive_matches(sport)
+
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,
@@ -692,6 +714,9 @@ async def mlb_match_detail(
     series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
 
     try:
+        if _is_archive(sport):
+            return get_archive_match_detail(sport, match_id)
+
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,
@@ -817,6 +842,9 @@ async def mlb_opportunities(
     series_ticker = SPORTS_CONFIG[sport]["kalshi_series_ticker"]
 
     try:
+        if _is_archive(sport):
+            return get_archive_opportunities(sport)
+
         data = await client.get_markets(
             series_ticker=series_ticker,
             status=status,

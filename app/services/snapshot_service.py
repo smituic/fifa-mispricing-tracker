@@ -10,7 +10,7 @@ from app.services.odds_client import OddsClient
 DB_PATH = "fifa_tracker.db"
 
 
-def init_db():
+def match_metadata():
     conn = sqlite3.connect(DB_PATH)
     # WAL mode: allows reads while writing, much safer for concurrent access
     conn.execute("PRAGMA journal_mode=WAL")
@@ -85,6 +85,16 @@ def init_db():
         ON match_metadata(sport)
     """)
 
+    # Migration: add commence_time (match kickoff, UTC ISO) if missing.
+    # Archive mode uses it to select the last PRE-kickoff snapshot rather
+    # than the last snapshot overall (which is often mid-match and shows
+    # inflated EV from live in-game odds).
+    cursor.execute("PRAGMA table_info(match_metadata)")
+    meta_cols = {row[1] for row in cursor.fetchall()}
+    if "commence_time" not in meta_cols:
+        print("Migrating match_metadata: adding 'commence_time' column")
+        cursor.execute("ALTER TABLE match_metadata ADD COLUMN commence_time TEXT")
+
     conn.commit()
     conn.close()
 
@@ -148,15 +158,16 @@ def _save_match_metadata_bulk(rows: list[dict]):
 
     cursor.executemany("""
         INSERT INTO match_metadata (
-            sport, match_id, title, home_team, away_team, last_seen
+            sport, match_id, title, home_team, away_team, commence_time, last_seen
         ) VALUES (
-            :sport, :match_id, :title, :home_team, :away_team, :last_seen
+            :sport, :match_id, :title, :home_team, :away_team, :commence_time, :last_seen
         )
         ON CONFLICT(sport, match_id) DO UPDATE SET
-            title     = COALESCE(excluded.title, match_metadata.title),
-            home_team = COALESCE(excluded.home_team, match_metadata.home_team),
-            away_team = COALESCE(excluded.away_team, match_metadata.away_team),
-            last_seen = excluded.last_seen
+            title         = COALESCE(excluded.title, match_metadata.title),
+            home_team     = COALESCE(excluded.home_team, match_metadata.home_team),
+            away_team     = COALESCE(excluded.away_team, match_metadata.away_team),
+            commence_time = COALESCE(excluded.commence_time, match_metadata.commence_time),
+            last_seen     = excluded.last_seen
     """, rows)
 
     conn.commit()
@@ -258,6 +269,7 @@ async def snapshot_all_matches(sport: str = DEFAULT_SPORT):
                     "title": analysis.get("match_title"),
                     "home_team": analysis.get("home_team"),
                     "away_team": analysis.get("away_team"),
+                    "commence_time": analysis.get("commence_time"),
                     "last_seen": now,
                 })
 

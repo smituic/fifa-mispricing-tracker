@@ -99,6 +99,7 @@ def build_metadata(markets: list[dict], sport: str) -> dict[str, dict]:
                 "title": f"{away} vs {home}",   # Kalshi MLB is away-first
                 "home_team": home,
                 "away_team": away,
+                "commence_time": m.get("occurrence_datetime"),
             }
         else:
             # FIFA: parse from the market title, same as the live path.
@@ -115,6 +116,7 @@ def build_metadata(markets: list[dict], sport: str) -> dict[str, dict]:
                 "title": f"{home} vs {away}",
                 "home_team": home,
                 "away_team": away,
+                "commence_time": m.get("occurrence_datetime"),
             }
 
     return meta
@@ -136,14 +138,15 @@ def upsert(rows: list[dict]) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.cursor().executemany("""
         INSERT INTO match_metadata (
-            sport, match_id, title, home_team, away_team, last_seen
+            sport, match_id, title, home_team, away_team, commence_time, last_seen
         ) VALUES (
-            :sport, :match_id, :title, :home_team, :away_team, :last_seen
+            :sport, :match_id, :title, :home_team, :away_team, :commence_time, :last_seen
         )
         ON CONFLICT(sport, match_id) DO UPDATE SET
-            title     = COALESCE(excluded.title, match_metadata.title),
-            home_team = COALESCE(excluded.home_team, match_metadata.home_team),
-            away_team = COALESCE(excluded.away_team, match_metadata.away_team)
+            title         = COALESCE(excluded.title, match_metadata.title),
+            home_team     = COALESCE(excluded.home_team, match_metadata.home_team),
+            away_team     = COALESCE(excluded.away_team, match_metadata.away_team),
+            commence_time = COALESCE(excluded.commence_time, match_metadata.commence_time)
     """, rows)
     conn.commit()
     conn.close()
@@ -174,6 +177,7 @@ async def main(sport: str) -> None:
             "title": m["title"],
             "home_team": m["home_team"],
             "away_team": m["away_team"],
+            "commence_time": m.get("commence_time"),
             "last_seen": now,
         }
         for mid, m in meta.items()

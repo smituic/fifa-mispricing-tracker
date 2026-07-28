@@ -38,7 +38,16 @@ def _spread_pct(bid: float | None, ask: float | None) -> float:
 
 
 def _latest_snapshots(sport: str, match_id: str | None = None) -> dict[str, list[dict]]:
-    """Latest snapshot row per (match_id, team), grouped by match_id."""
+    """Latest PRE-kickoff snapshot per (match_id, team), grouped by match_id.
+
+    For archived (finished) matches, the last snapshot overall is often taken
+    mid-match, when the Odds API served live in-game odds — producing inflated,
+    unreal EVs. We instead take each match's last snapshot strictly before its
+    commence_time (kickoff), giving a closing-line vs Kalshi comparison.
+
+    Matches with no commence_time recorded fall back to their last snapshot
+    overall (best available).
+    """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -47,16 +56,22 @@ def _latest_snapshots(sport: str, match_id: str | None = None) -> dict[str, list
                fair_probability, expected_value, liquidity_score,
                confidence_score, volume, open_interest, timestamp
         FROM (
-            SELECT *,
+            SELECT s.*,
                    ROW_NUMBER() OVER (
-                       PARTITION BY match_id, team ORDER BY timestamp DESC
+                       PARTITION BY s.match_id, s.team ORDER BY s.timestamp DESC
                    ) AS rn
-            FROM snapshots
-            WHERE sport = ?
+            FROM snapshots s
+            LEFT JOIN match_metadata m
+                   ON m.sport = s.sport AND m.match_id = s.match_id
+            WHERE s.sport = ?
+              AND (
+                    m.commence_time IS NULL
+                    OR s.timestamp < m.commence_time
+                  )
     """
     params: list = [sport]
     if match_id:
-        sql += " AND match_id = ?"
+        sql += " AND s.match_id = ?"
         params.append(match_id)
     sql += ") WHERE rn = 1"
 

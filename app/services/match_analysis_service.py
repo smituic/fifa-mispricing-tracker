@@ -349,6 +349,7 @@ async def build_match_analysis(
             "match_title": clean_title,
             "home_team": home_team,
             "away_team": away_team,
+            "commence_time": sportsbook_event.get("commence_time"),
             "kalshi": {"outcomes": grouped_outcomes},
             "sportsbook": {"fair_probabilities": sportsbook_fair},
             "analysis": {"outcomes": analysis},

@@ -10,7 +10,7 @@ from app.services.odds_client import OddsClient
 DB_PATH = "fifa_tracker.db"
 
 
-def match_metadata():
+def init_db():
     conn = sqlite3.connect(DB_PATH)
     # WAL mode: allows reads while writing, much safer for concurrent access
     conn.execute("PRAGMA journal_mode=WAL")

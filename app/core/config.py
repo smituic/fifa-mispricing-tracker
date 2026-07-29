@@ -50,7 +50,7 @@ SPORTS_CONFIG: dict[str, dict] = {
         "kalshi_series_ticker": "KXWCGAME",
         "odds_api_sport_key": "soccer_fifa_world_cup",
         "market_type": "3way",            # home / draw / away
-        "status": "live",
+        "status": "archive",
         "active_through": "2026-07-19",   # World Cup final
     },
     "mlb": {

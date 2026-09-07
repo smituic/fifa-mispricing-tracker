@@ -85,19 +85,19 @@ async def build_match_analysis(
         away_name_resolved = None
         home_name_resolved = None
 
-        if sport == "mlb":
+        if sport in ("mlb", "nfl"):
             from app.services.team_name_maps import (
                 parse_event_ticker, codes_to_names, SPORT_CODE_SETS,
             )
 
-            parsed = parse_event_ticker(match_id, SPORT_CODE_SETS["mlb"])
+            parsed = parse_event_ticker(match_id, SPORT_CODE_SETS[sport])
             if not parsed:
                 print(f"❌ MLB ticker parse failed: {match_id}")
                 return {"detail": f"Could not parse MLB event_ticker: {match_id}"}
 
             away_code, home_code = parsed
             away_name_resolved, home_name_resolved = codes_to_names(
-                away_code, home_code, sport="mlb"
+                away_code, home_code, sport=sport
             )
             if not (away_name_resolved and home_name_resolved):
                 print(f"❌ MLB unknown code(s) in {match_id}: away={away_code} home={home_code}")
@@ -156,10 +156,10 @@ async def build_match_analysis(
             )
 
             # Sport-aware outcome team resolution
-            if sport == "mlb":
+            if sport in ("mlb", "nfl"):
                 from app.services.team_name_maps import resolve_outcome_team
                 normalized_team = resolve_outcome_team(
-                    market, away_name_resolved, home_name_resolved, sport="mlb"
+                    market, away_name_resolved, home_name_resolved, sport=sport
                 )
                 if not normalized_team:
                     print(f"⚠️  Could not resolve MLB outcome for market {market.get('ticker')}")
@@ -192,7 +192,7 @@ async def build_match_analysis(
             })
 
         # ── Find sportsbook event ───────────────────────────────────────────
-        if sport == "mlb":
+        if sport in ("mlb", "nfl"):
             # Match on team pair AND game date. Multiple events with the same
             # team pair can appear in the Odds API response when consecutive-day
             # series games are both listed (and the in-progress game stays in

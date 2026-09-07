@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ODDS_API_KEY: str
     ODDS_API_KEY_FIFA: str | None = None
     ODDS_API_KEY_MLB: str | None = None
+    ODDS_API_KEY_NFL: str | None = None
 
     # Minimum EV threshold for signal classification
     MIN_EV_SIGNAL: float = 0.01
@@ -61,6 +62,15 @@ SPORTS_CONFIG: dict[str, dict] = {
         "market_type": "2way",            # home / away (moneyline)
         "status": "live",                 # season in progress
         "active_through": "2026-11-05",   # ~World Series end
+    },
+        "nfl": {
+        "name": "NFL",
+        "short_name": "NFL",
+        "kalshi_series_ticker": "KXNFLGAME",
+        "odds_api_sport_key": "americanfootball_nfl",
+        "market_type": "2way",
+        "status": "coming_soon",          # flip to "live" on Sept 9
+        "active_through": "2027-02-14",   # Super Bowl LXI
     },
 }
 

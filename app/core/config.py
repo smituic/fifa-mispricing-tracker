@@ -69,7 +69,7 @@ SPORTS_CONFIG: dict[str, dict] = {
         "kalshi_series_ticker": "KXNFLGAME",
         "odds_api_sport_key": "americanfootball_nfl",
         "market_type": "2way",
-        "status": "coming_soon",          # flip to "live" on Sept 9
+        "status": "live",         
         "active_through": "2027-02-14",   # Super Bowl LXI
     },
 }

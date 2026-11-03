@@ -12,7 +12,8 @@ Usage:  PYTHONPATH=. python3 scripts/backfill_match_metadata.py fifa
 import asyncio
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -73,8 +74,52 @@ async def fetch_all_markets(series_ticker: str) -> list[dict]:
     return out
 
 
+# Kickoff time (commence_time) is derived two ways:
+#   - Ticker has an HHMM segment (MLB, e.g. KXMLBGAME-26JUN261907TEXTOR):
+#     that's the scheduled first pitch in US Eastern. Parse it as
+#     America/New_York and convert to UTC.
+#   - Otherwise (NFL, NBA, FIFA): use Kalshi's occurrence_datetime minus 3h.
+#     For scheduled markets occurrence_datetime is a fixed kickoff + 3h
+#     (verified against Odds API commence_time). For settled markets Kalshi
+#     replaces it with the actual result time (~kickoff + 2h), so minus 3h
+#     lands before kickoff. That's deliberately conservative: the archive
+#     uses the last snapshot before commence_time, so erring early can only
+#     exclude pre-game snapshots, never include in-game ones.
+KALSHI_OCCURRENCE_OFFSET = timedelta(hours=3)
+
+
+def _format_utc(dt: datetime) -> str:
+    """Match the Odds API commence_time format: 2026-06-26T23:07:00Z."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def derive_commence_time(market: dict) -> str | None:
+    """Best-effort kickoff time (UTC ISO string) for a Kalshi market."""
+    from app.services.team_name_maps import _TICKER_DATE_RE
+
+    event_ticker = market.get("event_ticker") or ""
+    if "-" in event_ticker:
+        m = _TICKER_DATE_RE.match(event_ticker.split("-", 1)[1])
+        if m:
+            yy, mmm, dd, hhmm, _codes = m.groups()
+            if hhmm:
+                local = datetime.strptime(
+                    f"20{yy}-{mmm}-{dd} {hhmm}", "%Y-%b-%d %H%M"
+                ).replace(tzinfo=ZoneInfo("America/New_York"))
+                return _format_utc(local)
+
+    occ = market.get("occurrence_datetime")
+    if not occ:
+        return None
+    try:
+        occ_dt = datetime.fromisoformat(occ.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _format_utc(occ_dt - KALSHI_OCCURRENCE_OFFSET)
+
+
 def build_metadata(markets: list[dict], sport: str) -> dict[str, dict]:
-    """Map event_ticker -> {title, home_team, away_team}."""
+    """Map event_ticker -> {title, home_team, away_team, commence_time}."""
     meta: dict[str, dict] = {}
 
     for m in markets:
@@ -82,24 +127,25 @@ def build_metadata(markets: list[dict], sport: str) -> dict[str, dict]:
         if not event_ticker or event_ticker in meta:
             continue
 
-        if sport == "mlb":
-            # MLB resolves teams from ticker codes (city-only titles can't
-            # disambiguate multi-team cities). Mirrors build_match_analysis.
+        if sport in ("mlb", "nfl", "nba"):
+            # Code-based sports resolve teams from ticker codes (their titles,
+            # e.g. "Baltimore wins", can't be parsed). Mirrors
+            # build_match_analysis.
             from app.services.team_name_maps import (
                 parse_event_ticker, codes_to_names, SPORT_CODE_SETS,
             )
-            parsed = parse_event_ticker(event_ticker, SPORT_CODE_SETS["mlb"])
+            parsed = parse_event_ticker(event_ticker, SPORT_CODE_SETS[sport])
             if not parsed:
                 continue
             away_code, home_code = parsed
-            away, home = codes_to_names(away_code, home_code, sport="mlb")
+            away, home = codes_to_names(away_code, home_code, sport=sport)
             if not (away and home):
                 continue
             meta[event_ticker] = {
-                "title": f"{away} vs {home}",   # Kalshi MLB is away-first
+                "title": f"{away} vs {home}",   # Kalshi tickers are away-first
                 "home_team": home,
                 "away_team": away,
-                "commence_time": m.get("occurrence_datetime"),
+                "commence_time": derive_commence_time(m),
             }
         else:
             # FIFA: parse from the market title, same as the live path.
@@ -116,7 +162,7 @@ def build_metadata(markets: list[dict], sport: str) -> dict[str, dict]:
                 "title": f"{home} vs {away}",
                 "home_team": home,
                 "away_team": away,
-                "commence_time": m.get("occurrence_datetime"),
+                "commence_time": derive_commence_time(m),
             }
 
     return meta
@@ -136,6 +182,8 @@ def upsert(rows: list[dict]) -> None:
         return
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
+    # commence_time is never overwritten: a value captured live from the
+    # Odds API is exact, while the backfill's is derived. Only fill gaps.
     conn.cursor().executemany("""
         INSERT INTO match_metadata (
             sport, match_id, title, home_team, away_team, commence_time, last_seen
@@ -146,7 +194,7 @@ def upsert(rows: list[dict]) -> None:
             title         = COALESCE(excluded.title, match_metadata.title),
             home_team     = COALESCE(excluded.home_team, match_metadata.home_team),
             away_team     = COALESCE(excluded.away_team, match_metadata.away_team),
-            commence_time = COALESCE(excluded.commence_time, match_metadata.commence_time)
+            commence_time = COALESCE(match_metadata.commence_time, excluded.commence_time)
     """, rows)
     conn.commit()
     conn.close()
@@ -169,7 +217,7 @@ async def main(sport: str) -> None:
     have = known_match_ids(sport)
     print(f"Matches in snapshots: {len(have)}")
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     rows = [
         {
             "sport": sport,

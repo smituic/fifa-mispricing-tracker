@@ -61,7 +61,7 @@ SPORTS_CONFIG: dict[str, dict] = {
         "kalshi_series_ticker": "KXMLBGAME",
         "odds_api_sport_key": "baseball_mlb",
         "market_type": "2way",            # home / away (moneyline)
-        "status": "live",                 # season in progress
+        "status": "archive",              # 2026 season complete
         "active_through": "2026-11-05",   # ~World Series end
     },
         "nfl": {

@@ -103,14 +103,20 @@ def _metadata(sport: str) -> dict[str, dict]:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT match_id, title, home_team, away_team FROM match_metadata WHERE sport = ?",
+        "SELECT match_id, title, home_team, away_team, commence_time "
+        "FROM match_metadata WHERE sport = ?",
         (sport,),
     )
     rows = cursor.fetchall()
     conn.close()
     return {
-        mid: {"title": title, "home_team": home, "away_team": away}
-        for mid, title, home, away in rows
+        mid: {
+            "title": title,
+            "home_team": home,
+            "away_team": away,
+            "commence_time": commence_time,
+        }
+        for mid, title, home, away, commence_time in rows
     }
 
 

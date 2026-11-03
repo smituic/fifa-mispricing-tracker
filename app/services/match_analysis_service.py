@@ -85,24 +85,24 @@ async def build_match_analysis(
         away_name_resolved = None
         home_name_resolved = None
 
-        if sport in ("mlb", "nfl"):
+        if sport in ("mlb", "nfl", "nba"):
             from app.services.team_name_maps import (
                 parse_event_ticker, codes_to_names, SPORT_CODE_SETS,
             )
 
             parsed = parse_event_ticker(match_id, SPORT_CODE_SETS[sport])
             if not parsed:
-                print(f"❌ MLB ticker parse failed: {match_id}")
-                return {"detail": f"Could not parse MLB event_ticker: {match_id}"}
+                print(f"❌ {sport.upper()} ticker parse failed: {match_id}")
+                return {"detail": f"Could not parse {sport.upper()} event_ticker: {match_id}"}
 
             away_code, home_code = parsed
             away_name_resolved, home_name_resolved = codes_to_names(
                 away_code, home_code, sport=sport
             )
             if not (away_name_resolved and home_name_resolved):
-                print(f"❌ MLB unknown code(s) in {match_id}: away={away_code} home={home_code}")
+                print(f"❌ {sport.upper()} unknown code(s) in {match_id}: away={away_code} home={home_code}")
                 return {
-                    "detail": f"Unknown MLB team codes: {away_code}/{home_code}"
+                    "detail": f"Unknown {sport.upper()} team codes: {away_code}/{home_code}"
                 }
 
             home_team = home_name_resolved
@@ -156,13 +156,13 @@ async def build_match_analysis(
             )
 
             # Sport-aware outcome team resolution
-            if sport in ("mlb", "nfl"):
+            if sport in ("mlb", "nfl", "nba"):
                 from app.services.team_name_maps import resolve_outcome_team
                 normalized_team = resolve_outcome_team(
                     market, away_name_resolved, home_name_resolved, sport=sport
                 )
                 if not normalized_team:
-                    print(f"⚠️  Could not resolve MLB outcome for market {market.get('ticker')}")
+                    print(f"⚠️  Could not resolve {sport.upper()} outcome for market {market.get('ticker')}")
                     continue
             else:
                 raw_team = market.get("yes_sub_title")
@@ -192,7 +192,7 @@ async def build_match_analysis(
             })
 
         # ── Find sportsbook event ───────────────────────────────────────────
-        if sport in ("mlb", "nfl"):
+        if sport in ("mlb", "nfl", "nba"):
             # Match on team pair AND game date. Multiple events with the same
             # team pair can appear in the Odds API response when consecutive-day
             # series games are both listed (and the in-progress game stays in
@@ -208,6 +208,7 @@ async def build_match_analysis(
             # Kalshi MLB tickers consistently use Eastern; we convert to UTC
             # for direct comparison with Odds API commence_time.
             kalshi_dt_utc = None
+            kalshi_date_et = None  # set when ticker has a date but no HHMM
             try:
                 from app.services.team_name_maps import _TICKER_DATE_RE
                 from zoneinfo import ZoneInfo
@@ -223,12 +224,12 @@ async def build_match_analysis(
                         ).replace(tzinfo=ZoneInfo("America/New_York"))
                         kalshi_dt_utc = kalshi_dt_local.astimezone(ZoneInfo("UTC"))
                     else:
-                        # No time in ticker — fall back to noon ET that day
-                        kalshi_dt_local = datetime.strptime(
-                            f"20{yy}-{mmm}-{dd} 1200",
-                            "%Y-%b-%d %H%M",
-                        ).replace(tzinfo=ZoneInfo("America/New_York"))
-                        kalshi_dt_utc = kalshi_dt_local.astimezone(ZoneInfo("UTC"))
+                        # No time in ticker (NFL, NBA) — match on the ET
+                        # calendar date instead of a time window, so evening
+                        # games (which fall on the next UTC day) still match.
+                        kalshi_date_et = datetime.strptime(
+                            f"20{yy}-{mmm}-{dd}", "%Y-%b-%d"
+                        ).date()
             except Exception as e:
                 print(f"⚠️  Could not parse datetime from {match_id}: {e}")
 
@@ -261,9 +262,23 @@ async def build_match_analysis(
                     # priced this future game yet, OR all matches are live
                     # in-game snapshots of an earlier game in the series.
                     sportsbook_event = None
+            elif kalshi_date_et and candidates:
+                # Date-only ticker: accept only events whose kickoff, in ET,
+                # falls on the ticker's date.
+                def _et_date(ev):
+                    ct = ev.get("commence_time")
+                    if not ct:
+                        return None
+                    try:
+                        ev_dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                        return ev_dt.astimezone(ZoneInfo("America/New_York")).date()
+                    except Exception:
+                        return None
+
+                same_day = [e for e in candidates if _et_date(e) == kalshi_date_et]
+                sportsbook_event = same_day[0] if same_day else None
             elif candidates:
-                # No time parsed — fall back to first match (preserves FIFA
-                # behavior; FIFA tickers don't have time segments).
+                # No date parsed — fall back to first match.
                 sportsbook_event = candidates[0]
             else:
                 sportsbook_event = None

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     ODDS_API_KEY_FIFA: str | None = None
     ODDS_API_KEY_MLB: str | None = None
     ODDS_API_KEY_NFL: str | None = None
+    ODDS_API_KEY_NBA: str | None = None
 
     # Minimum EV threshold for signal classification
     MIN_EV_SIGNAL: float = 0.01
@@ -71,6 +72,15 @@ SPORTS_CONFIG: dict[str, dict] = {
         "market_type": "2way",
         "status": "live",         
         "active_through": "2027-02-14",   # Super Bowl LXI
+    },
+    "nba": {
+        "name": "NBA",
+        "short_name": "NBA",
+        "kalshi_series_ticker": "KXNBAGAME",
+        "odds_api_sport_key": "basketball_nba",
+        "market_type": "2way",
+        "status": "live",
+        "active_through": "2027-06-30",   # ~NBA Finals end
     },
 }
 

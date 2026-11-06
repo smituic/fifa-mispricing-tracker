@@ -78,7 +78,7 @@ async def fetch_all_markets(series_ticker: str) -> list[dict]:
 #   - Ticker has an HHMM segment (MLB, e.g. KXMLBGAME-26JUN261907TEXTOR):
 #     that's the scheduled first pitch in US Eastern. Parse it as
 #     America/New_York and convert to UTC.
-#   - Otherwise (NFL, NBA, FIFA): use Kalshi's occurrence_datetime minus 3h.
+#   - Otherwise (NFL, NBA, NHL, FIFA): use Kalshi's occurrence_datetime minus 3h.
 #     For scheduled markets occurrence_datetime is a fixed kickoff + 3h
 #     (verified against Odds API commence_time). For settled markets Kalshi
 #     replaces it with the actual result time (~kickoff + 2h), so minus 3h
@@ -127,7 +127,7 @@ def build_metadata(markets: list[dict], sport: str) -> dict[str, dict]:
         if not event_ticker or event_ticker in meta:
             continue
 
-        if sport in ("mlb", "nfl", "nba"):
+        if sport in ("mlb", "nfl", "nba", "nhl"):
             # Code-based sports resolve teams from ticker codes (their titles,
             # e.g. "Baltimore wins", can't be parsed). Mirrors
             # build_match_analysis.

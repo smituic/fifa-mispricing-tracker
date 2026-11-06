@@ -85,7 +85,7 @@ async def build_match_analysis(
         away_name_resolved = None
         home_name_resolved = None
 
-        if sport in ("mlb", "nfl", "nba"):
+        if sport in ("mlb", "nfl", "nba", "nhl"):
             from app.services.team_name_maps import (
                 parse_event_ticker, codes_to_names, SPORT_CODE_SETS,
             )
@@ -156,7 +156,7 @@ async def build_match_analysis(
             )
 
             # Sport-aware outcome team resolution
-            if sport in ("mlb", "nfl", "nba"):
+            if sport in ("mlb", "nfl", "nba", "nhl"):
                 from app.services.team_name_maps import resolve_outcome_team
                 normalized_team = resolve_outcome_team(
                     market, away_name_resolved, home_name_resolved, sport=sport
@@ -192,7 +192,7 @@ async def build_match_analysis(
             })
 
         # ── Find sportsbook event ───────────────────────────────────────────
-        if sport in ("mlb", "nfl", "nba"):
+        if sport in ("mlb", "nfl", "nba", "nhl"):
             # Match on team pair AND game date. Multiple events with the same
             # team pair can appear in the Odds API response when consecutive-day
             # series games are both listed (and the in-progress game stays in
@@ -224,7 +224,7 @@ async def build_match_analysis(
                         ).replace(tzinfo=ZoneInfo("America/New_York"))
                         kalshi_dt_utc = kalshi_dt_local.astimezone(ZoneInfo("UTC"))
                     else:
-                        # No time in ticker (NFL, NBA) — match on the ET
+                        # No time in ticker (NFL, NBA, NHL) — match on the ET
                         # calendar date instead of a time window, so evening
                         # games (which fall on the next UTC day) still match.
                         kalshi_date_et = datetime.strptime(

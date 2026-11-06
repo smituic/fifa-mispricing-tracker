@@ -172,11 +172,47 @@ NBA_CODE_TO_ODDS: dict[str, str] = {
     "WAS": "Washington Wizards",
 }
 
+NHL_CODE_TO_ODDS: dict[str, str] = {
+    "ANA": "Anaheim Ducks",
+    "BOS": "Boston Bruins",
+    "BUF": "Buffalo Sabres",
+    "CAR": "Carolina Hurricanes",
+    "CBJ": "Columbus Blue Jackets",
+    "CGY": "Calgary Flames",
+    "CHI": "Chicago Blackhawks",
+    "COL": "Colorado Avalanche",
+    "DAL": "Dallas Stars",
+    "DET": "Detroit Red Wings",
+    "EDM": "Edmonton Oilers",
+    "FLA": "Florida Panthers",
+    "LA":  "Los Angeles Kings",
+    "MIN": "Minnesota Wild",
+    "MTL": "Montréal Canadiens",
+    "NJ":  "New Jersey Devils",
+    "NSH": "Nashville Predators",
+    "NYI": "New York Islanders",
+    "NYR": "New York Rangers",
+    "OTT": "Ottawa Senators",
+    "PHI": "Philadelphia Flyers",
+    "PIT": "Pittsburgh Penguins",
+    "SEA": "Seattle Kraken",
+    "SJ":  "San Jose Sharks",
+    "STL": "St Louis Blues",
+    "TB":  "Tampa Bay Lightning",
+    "TOR": "Toronto Maple Leafs",
+    "UTA": "Utah Mammoth",
+    "VAN": "Vancouver Canucks",
+    "VGK": "Vegas Golden Knights",
+    "WPG": "Winnipeg Jets",
+    "WSH": "Washington Capitals",
+}
+
 # Per-sport set of valid codes, used by the ticker parser's split logic.
 SPORT_CODE_SETS: dict[str, set[str]] = {
     "mlb": set(MLB_CODE_TO_ODDS),
     "nfl": set(NFL_CODE_TO_ODDS),
     "nba": set(NBA_CODE_TO_ODDS),
+    "nhl": set(NHL_CODE_TO_ODDS),
 }
 
 # Per-sport code->name resolver tables.
@@ -184,6 +220,7 @@ SPORT_CODE_TO_NAME: dict[str, dict[str, str]] = {
     "mlb": MLB_CODE_TO_ODDS,
     "nfl": NFL_CODE_TO_ODDS,
     "nba": NBA_CODE_TO_ODDS,
+    "nhl": NHL_CODE_TO_ODDS,
 }
 
 
